@@ -57,11 +57,11 @@ _run config="Debug" exe="MoerEditor":
 # MARK: setup
 
 dir_sponza := "./asset/scenes/sponza"
-dir_config := "./source/configs/MoerEngine.toml"
+dir_config := "./MoerEngine.toml"
 setup:
     git config --local blame.ignoreRevsFile .git-blame-ignore-revs
     if (!(Test-Path {{dir_sponza}})) { git clone --branch sponza-scene-files --depth 1 git@github.com:NJUCG/MoerEngine.git {{dir_sponza}} }
-    if (!(Test-Path {{dir_config}})) { cp source/configs/template.MoerEngine.toml {{dir_config}} }
+    if (!(Test-Path {{dir_config}})) { cp template.MoerEngine.toml {{dir_config}} }
 
 # MARK: gbr
 
