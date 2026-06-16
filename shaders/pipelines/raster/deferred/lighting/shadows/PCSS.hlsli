@@ -8,7 +8,10 @@
 //  0: disabled.
 //  1: share occluder search result.
 //  2: share occluder search and PCF results.
-#define PCSS_SHARE_PER_PIXEL_QUAD 2
+//
+// ShadowMask skips sky/background pixels before entering PCSS. Quad sharing can
+// then read inactive lanes at geometry edges and cause bright fringes.
+#define PCSS_SHARE_PER_PIXEL_QUAD 0
 
 // Whether to debug pixel where they early return.
 #define PCSS_DEBUG_EARLY_RETURN 0
