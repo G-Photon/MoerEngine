@@ -1008,6 +1008,16 @@ foreach(cuda_test IN ITEMS TestCuda TestTorch TestTensorRT TestCudaInterop)
     endif()
 endforeach()
 
+add_executable(TestTonemappingExposure "TonemappingExposureTest.cpp")
+target_link_libraries(TestTonemappingExposure PRIVATE Moer::Render)
+set_target_properties(TestTonemappingExposure PROPERTIES FOLDER ${moer_test_folder})
+if(MOER_SHADER_GPU_TESTS)
+    add_test(NAME TonemappingHistogram COMMAND $<TARGET_FILE:TestTonemappingExposure> --histogram)
+    add_test(NAME TonemappingAdaptation COMMAND $<TARGET_FILE:TestTonemappingExposure> --adaptation)
+    set_tests_properties(TonemappingHistogram TonemappingAdaptation PROPERTIES
+        WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 90 LABELS "gpu;shader")
+endif()
+
 if (TARGET EnTT::EnTT)
     set(test_target TestEnTT)
     add_executable(${test_target} EnTTTest.cpp)

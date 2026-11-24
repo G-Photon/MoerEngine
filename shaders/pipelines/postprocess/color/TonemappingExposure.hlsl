@@ -31,6 +31,7 @@
 
         // 下面这个公式，是在判断区间相交。即 [low_cdf, high_cdf] 和 [cdf, cdf + bin_val] 是否相交
         if (low_cdf <= cdf + bin_val && cdf < high_cdf) {
+            float selected_count = max(0.0f, min(cdf + bin_val, high_cdf) - max(cdf, low_cdf));
 
             // x in [0, 1]
             float x = i / (float)Moer::TONEMAPPING_HISTOGRAM_BIN_COUNT;
@@ -41,8 +42,8 @@
             // lum in [2^log2lum_min, 2^log2lum_max], e.g. [0.001, 65536]
             float lum = exp2(y);
 
-            weight_sum += lum * bin_val;
-            bin_sum += bin_val;
+            weight_sum += lum * selected_count;
+            bin_sum += selected_count;
         }
 
         cdf += bin_val;
@@ -68,13 +69,20 @@
     float target_exposure_log2  = log2(max(target_exposure, 0.0001f));
     float diff_log2          = target_exposure_log2 - last_exposure_log2;
 
+    float adaption_speed = (diff_log2 > 0) ? param.ae.eye_adaptation_speed_up : param.ae.eye_adaptation_speed_down;
+    if (param.ae.frame_time <= 0.0f || adaption_speed <= 0.0f) {
+        return;
+    }
+
     if (abs(diff_log2) < param.ae.diff_log2_threshold) {
         exposure[0] = asuint(target_exposure);
         return;
     }
 
-    float adaption_speed = (diff_log2 > 1) ? param.ae.eye_adaptation_speed_up : param.ae.eye_adaptation_speed_down;
-    float delta_log2 = diff_log2 * (param.ae.frame_time * adaption_speed);
+    // Exponential integration is frame-rate independent and cannot overshoot
+    // during a long frame. A zero/negative elapsed time or speed leaves history unchanged.
+    float adaptation = 1.0f - exp(-param.ae.frame_time * adaption_speed);
+    float delta_log2 = diff_log2 * adaptation;
 
     float result_exposure_log2 = last_exposure_log2 + delta_log2;
     float result_exposure = exp2(result_exposure_log2);
