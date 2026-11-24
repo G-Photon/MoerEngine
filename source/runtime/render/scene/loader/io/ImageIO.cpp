@@ -7,6 +7,7 @@
 #include "rhi/RHICommon.h"
 
 #include <cassert>
+#include <memory>
 #include <dds.hpp>
 #include <gl_format.h>
 #include <numeric>
@@ -204,8 +205,12 @@ EPixelFormat ConvertFormatFromDDSFormat(uint32 format) {
 /// Generate mipmaps for the given image data
 /// @param _desc Image description containing the base image data
 static void Generatemipmaps(ImageReadDesc& _desc, bool _is_generate_mipmaps) {
-    if (_desc.mips > 1)
-        return; // Mipmaps already present
+    if (!_is_generate_mipmaps || _desc.mips > 1)
+        return;
+    // This byte resampler cannot decode compressed blocks or interpret other
+    // component types. Preserve their source data and mip count.
+    if (_desc.format != PF_R8G8B8A8_UNORM && _desc.format != PF_R8G8B8A8_SRGB)
+        return;
 
     // Setup variables
     Extent3D extent          = {_desc.width, _desc.height, _desc.layers};
@@ -236,13 +241,18 @@ static void Generatemipmaps(ImageReadDesc& _desc, bool _is_generate_mipmaps) {
     assert(channel == 4 && "Default support 4 channels. If you need more, please modify the code");
     auto channel_in_stbir = stbir_pixel_layout::STBIR_4CHANNEL;
 
-    auto* mipmaps_mapped_data = new uint8[_desc.layers * mipmaps_size];
+    const uint32 image_count         = _desc.layers * _desc.faces;
+    auto*        mipmaps_mapped_data = new uint8[image_count * mipmaps_size];
     // Generate mipmaps for each layer
     // TODO: #pragma omp parallel for
-    for (uint32 layer = 0; layer < _desc.layers; ++layer) {
+    for (uint32 layer = 0; layer < image_count; ++layer) {
         auto offset = layer * mipmaps_size;
         // Copy base mipmap (level 0)
-        memcpy(mipmaps_mapped_data + offset, static_cast<uint8 const*>(_desc.data) + offset, base_image_size);
+        memcpy(
+            mipmaps_mapped_data + offset,
+            static_cast<uint8 const*>(_desc.data) + layer * base_image_size,
+            base_image_size
+        );
 
         // Generate lower mipmap levels
         for (uint32 mip = 1; mip < mip_level; ++mip) {
@@ -269,7 +279,7 @@ static void Generatemipmaps(ImageReadDesc& _desc, bool _is_generate_mipmaps) {
 
     // Update descriptor with generated mipmaps
     _desc.mips          = mip_level;
-    _desc.data_size     = mipmaps_size * _desc.layers;
+    _desc.data_size     = mipmaps_size * image_count;
     _desc.data          = mipmaps_mapped_data;
     _desc.data_callback = [](void* _ptr) {
         delete[] static_cast<uint8*>(_ptr);
@@ -360,6 +370,9 @@ ImageReadDesc ImageIO::ReadFromFile(
             LOG_ERROR("Failed to load KTX texture: {}", ktxErrorString(result));
             throw std::runtime_error("Failed to load KTX texture");
         }
+        std::unique_ptr<ktxTexture, decltype(&ktxTexture_Destroy)> texture_owner(
+            ktx_texture, ktxTexture_Destroy
+        );
 
         // Set texture properties
         desc.width  = ktx_texture->baseWidth;

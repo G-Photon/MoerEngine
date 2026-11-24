@@ -993,6 +993,15 @@ if (TARGET TensorRT)
     set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 endif()
 
+add_executable(TestKtxImage "KtxImageTest.cpp"
+    "${moer_source_dir}/../3rdparty/AssetLoad/ktx/lib/writer.c"
+    "${moer_source_dir}/runtime/render/scene/loader/io/ImageIO.cpp"
+    "${moer_source_dir}/runtime/render/scene/loader/io/KtxImageHelper.cpp")
+target_link_libraries(TestKtxImage PRIVATE Moer::Render)
+set_target_properties(TestKtxImage PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME KtxImageArrayMips COMMAND $<TARGET_FILE:TestKtxImage>)
+set_tests_properties(KtxImageArrayMips PROPERTIES TIMEOUT 30)
+
 # These tests execute GPU work and fail on unavailable runtimes or wrong readbacks.
 # Keep SDK DLL lookup local to each test instead of relying on a global PATH.
 foreach(cuda_test IN ITEMS TestCuda TestTorch TestTensorRT TestCudaInterop)
