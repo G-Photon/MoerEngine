@@ -6,9 +6,15 @@
 #include "RasterTextures.h"
 #include "RasterTool.h"
 
-#include <stdexcept>
+#include <algorithm>
 
 namespace Moer::Render::Raster {
+
+namespace {
+Rect2D MipRect(const TextureRef& texture, uint32 mip = 0) {
+    return Rect2D(0, 0, std::max(1u, texture->GetWidth() >> mip), std::max(1u, texture->GetHeight() >> mip));
+}
+} // namespace
 
 BloomPass::BloomPass(RasterContext& context) :
     BloomPass(context.manager, context.textures.lighting_output.tex->GetFormat()) {}
@@ -52,155 +58,79 @@ BloomPass::BloomPass(ShaderManager& manager, EPixelFormat scene_format) {
                          .Build<BloomApplyPipeline>(std::move(apply_info));
 }
 
-BloomPass::RecordParameters BloomPass::Prepare(
-    const RasterContext& context,
-    const RasterConfig&  raster_config,
-    TextureWithHandle    input_texture
-) const {
-    return Prepare(
-        raster_config.bloom_enabled,
-        std::move(input_texture),
-        context.textures.bloom_downsample_chain,
-        context.textures.bloom_upsample_chain
-    );
-}
-
-BloomPass::RecordParameters BloomPass::Prepare(
-    bool              enabled,
-    TextureWithHandle input,
-    TextureWithHandle downsample,
-    TextureWithHandle upsample
-) const {
-    RecordParameters parameters{};
-    parameters.enabled               = enabled;
-    parameters.input                 = std::move(input);
-    parameters.downsample_chain      = std::move(downsample);
-    parameters.upsample_chain        = std::move(upsample);
-    parameters.prefilter.threshold   = 20.0f;
-    parameters.prefilter.knee        = 0.5f;
-    parameters.apply.bloom_intensity = 0.1f;
-    if (!parameters.enabled) {
-        return parameters;
-    }
-
-    const uint32 mip_count = parameters.downsample_chain.tex->GetNumMips();
-    if (mip_count == 0 || parameters.upsample_chain.tex->GetNumMips() != mip_count) {
-        throw std::invalid_argument("Bloom requires nonempty downsample/upsample chains with matching mips");
-    }
-    parameters.downsample_dispatches.reserve(mip_count > 0 ? mip_count - 1 : 0);
-    for (uint32 mip = 1; mip < mip_count; ++mip) {
-        DownsampleDispatch dispatch{};
-        const uint2        source_size = parameters.downsample_chain.GetSize(mip - 1);
-        dispatch.source                = parameters.downsample_chain.tex->GetView(mip - 1, 1);
-        dispatch.render_area           = parameters.downsample_chain.GetRect2D(mip);
-        dispatch.shader.inv_size       = float2(1.0f / source_size.x, 1.0f / source_size.y);
-        dispatch.mip                   = mip;
-        parameters.downsample_dispatches.emplace_back(std::move(dispatch));
-    }
-
-    parameters.upsample_dispatches.reserve(mip_count > 0 ? mip_count - 1 : 0);
-    for (int mip = static_cast<int>(mip_count) - 2; mip >= 0; --mip) {
-        UpsampleDispatch dispatch{};
-        const uint2      small_size   = parameters.downsample_chain.GetSize(mip + 1);
-        dispatch.source               = mip == static_cast<int>(mip_count) - 2 ?
-                                            parameters.downsample_chain.tex->GetView(mip + 1, 1) :
-                                            parameters.upsample_chain.tex->GetView(mip + 1, 1);
-        dispatch.downsample           = parameters.downsample_chain.tex->GetView(mip, 1);
-        dispatch.render_area          = parameters.upsample_chain.GetRect2D(mip);
-        dispatch.shader.inv_size      = float2(1.0f / small_size.x, 1.0f / small_size.y);
-        dispatch.shader.filter_radius = 1.2f;
-        dispatch.mip                  = static_cast<uint32>(mip);
-        parameters.upsample_dispatches.emplace_back(std::move(dispatch));
-    }
-    return parameters;
-}
-
-void BloomPass::RecordPrefilter(CommandList& cmd_list, const RecordParameters& parameters) {
+void BloomPass::RecordPrefilter(CommandList& cmd_list, const TextureRef& input, const TextureRef& downsample) {
+    const BloomPrefilterParam param{.threshold = 20.0f, .knee = 0.5f};
     cmd_list
         .Gfx(
             prefilter_pipeline,
-            parameters.input.tex->GetView(0, 1),
-            parameters.linear_sampler,
-            parameters.prefilter
+            input->GetView(0, 1),
+            Sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE},
+            param
         )
         .Draw(
             "Bloom Prefilter Pass",
-            parameters.downsample_chain.GetRect2D(0),
+            MipRect(downsample),
             std::move(RasterTool::GetFullScreenDrawDatas()),
             ColorAttachment{
-                parameters.downsample_chain.tex, EAttachmentAction::AC_CLEAR_STORE, float4(0, 0, 0, 0), 0
+                downsample, EAttachmentAction::AC_CLEAR_STORE, float4(0, 0, 0, 0), 0
             }
         );
 }
 
-void BloomPass::RecordDownsample(CommandList& cmd_list, const RecordParameters& parameters, uint32 mip) {
-    const auto& dispatch = parameters.downsample_dispatches.at(mip - 1);
-    cmd_list.Gfx(downsample_pipeline, dispatch.source, parameters.linear_sampler, dispatch.shader)
+void BloomPass::RecordDownsample(CommandList& cmd_list, const TextureRef& downsample, uint32 mip) {
+    const auto                 size = MipRect(downsample, mip - 1).extent;
+    const BloomDownsampleParam param{.inv_size = float2(1.0f / size.x, 1.0f / size.y)};
+    cmd_list.Gfx(downsample_pipeline, downsample->GetView(mip - 1, 1), Sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE}, param)
         .Draw(
-            std::format("Downsample Pass #{}", dispatch.mip),
-            dispatch.render_area,
+            std::format("Downsample Pass #{}", mip),
+            MipRect(downsample, mip),
             std::move(RasterTool::GetFullScreenDrawDatas()),
-            ColorAttachment{parameters.downsample_chain.tex, AC_CLEAR_STORE, float4(0), dispatch.mip}
+            ColorAttachment{downsample, AC_CLEAR_STORE, float4(0), mip}
         );
 }
 
-void BloomPass::RecordUpsample(CommandList& cmd_list, const RecordParameters& parameters, uint32 mip) {
-    const auto& dispatch = parameters.upsample_dispatches.at(parameters.upsample_dispatches.size() - 1 - mip);
+void BloomPass::RecordUpsample(
+    CommandList&      cmd_list,
+    const TextureRef& source,
+    const TextureRef& downsample,
+    const TextureRef& upsample,
+    uint32            mip
+) {
+    const auto               size = MipRect(source, mip + 1).extent;
+    const BloomUpsampleParam param{
+        .filter_radius = 1.2f, .inv_size = float2(1.0f / size.x, 1.0f / size.y)
+    };
     cmd_list
         .Gfx(
             upsample_pipeline,
-            dispatch.source,
-            dispatch.downsample,
-            parameters.linear_sampler,
-            dispatch.shader
+            source->GetView(mip + 1, 1),
+            downsample->GetView(mip, 1),
+            Sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE},
+            param
         )
         .Draw(
-            std::format("Bloom Upsample Pass #{}", dispatch.mip),
-            dispatch.render_area,
+            std::format("Bloom Upsample Pass #{}", mip),
+            MipRect(upsample, mip),
             std::move(RasterTool::GetFullScreenDrawDatas()),
-            ColorAttachment{parameters.upsample_chain.tex, AC_CLEAR_STORE, float4(0), dispatch.mip}
+            ColorAttachment{upsample, AC_CLEAR_STORE, float4(0), mip}
         );
 }
 
-void BloomPass::RecordApply(CommandList& cmd_list, const RecordParameters& parameters) {
+void BloomPass::RecordApply(CommandList& cmd_list, const TextureRef& input, const TextureRef& bloom) {
+    const BloomApplyParam param{.bloom_intensity = 0.1f};
     cmd_list
         .Gfx(
             apply_pipeline,
-            (parameters.upsample_dispatches.empty() ? parameters.downsample_chain : parameters.upsample_chain)
-                .tex->GetView(0, 1),
-            parameters.linear_sampler,
-            parameters.apply
+            bloom->GetView(0, 1),
+            Sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE},
+            param
         )
         .Draw(
             "Apply Bloom to Scene",
-            parameters.input.GetRect2D(),
+            MipRect(input),
             std::move(RasterTool::GetFullScreenDrawDatas()),
-            ColorAttachment{parameters.input.tex, EAttachmentAction::AC_LOAD_STORE, float4(0, 0, 0, 0), 0}
+            ColorAttachment{input, EAttachmentAction::AC_LOAD_STORE, float4(0, 0, 0, 0), 0}
         );
-}
-
-void BloomPass::Record(CommandList& cmd_list, const RecordParameters& parameters) {
-    if (!parameters.enabled) {
-        return;
-    }
-    RecordPrefilter(cmd_list, parameters);
-    for (const auto& dispatch : parameters.downsample_dispatches) {
-        RecordDownsample(cmd_list, parameters, dispatch.mip);
-    }
-    for (const auto& dispatch : parameters.upsample_dispatches) {
-        RecordUpsample(cmd_list, parameters, dispatch.mip);
-    }
-    RecordApply(cmd_list, parameters);
-}
-
-TextureWithHandle BloomPass::Process(
-    RasterContext&      context,
-    const RasterConfig& raster_config,
-    TextureWithHandle   input_texture
-) {
-    const RecordParameters parameters = Prepare(context, raster_config, std::move(input_texture));
-    Record(context.cmd_list, parameters);
-    return parameters.input;
 }
 
 } // namespace Moer::Render::Raster

@@ -1027,8 +1027,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             RenderGraph::TextureHandle denoiser_output;
             RenderGraph::TextureHandle ssr_output;
             RenderGraph::TextureHandle aa_output;
-            RenderGraph::TextureHandle bloom_downsample_chain;
-            RenderGraph::TextureHandle bloom_upsample_chain;
             RenderGraph::BufferHandle  tonemapping_exposure;
             RenderGraph::TextureHandle tonemapping_output;
             RenderGraph::TextureHandle selected_framebuffer;
@@ -1183,11 +1181,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     import_texture("ssr_output", raster_context.textures.ssr_output.tex);
                 graph_resources.aa_output =
                     import_texture("aa_output", raster_context.textures.aa_output.tex);
-                graph_resources.bloom_downsample_chain = import_texture(
-                    "bloom_downsample_chain", raster_context.textures.bloom_downsample_chain.tex
-                );
-                graph_resources.bloom_upsample_chain =
-                    import_texture("bloom_upsample_chain", raster_context.textures.bloom_upsample_chain.tex);
                 const auto& tonemapping_exposure = tonemapping_pass->GetExposureBuffer();
                 graph_resources.tonemapping_exposure =
                     ImportRasterBuffer(graph, "tonemapping_exposure", tonemapping_exposure.Get());
@@ -1508,12 +1501,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 processing_image_resource = graph_resources.aa_output;
                 bloom_pass->AddToGraph(
                     graph,
-                    raster_context,
-                    raster_config,
-                    processing_image,
-                    {.input            = processing_image_resource,
-                     .downsample_chain = graph_resources.bloom_downsample_chain,
-                     .upsample_chain   = graph_resources.bloom_upsample_chain}
+                    raster_config.bloom_enabled,
+                    processing_image_resource,
+                    Extent2D(processing_image.GetSize())
                 );
                 tonemapping_pass->AddToGraph(
                     graph,

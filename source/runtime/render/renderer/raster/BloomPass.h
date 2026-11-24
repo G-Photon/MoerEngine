@@ -55,65 +55,33 @@ public:
         RenderGraph::TextureHandle upsample_chain{};
     };
 
-    struct DownsampleDispatch {
-        TextureView          source{};
-        Rect2D               render_area{};
-        BloomDownsampleParam shader{};
-        uint32               mip{0};
-    };
-
-    struct UpsampleDispatch {
-        TextureView        source{};
-        TextureView        downsample{};
-        Rect2D             render_area{};
-        BloomUpsampleParam shader{};
-        uint32             mip{0};
-    };
-
-    struct RecordParameters {
-        bool                      enabled{false};
-        TextureWithHandle         input{};
-        TextureWithHandle         downsample_chain{};
-        TextureWithHandle         upsample_chain{};
-        Sampler                   linear_sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE};
-        BloomPrefilterParam       prefilter{};
-        BloomApplyParam           apply{};
-        Array<DownsampleDispatch> downsample_dispatches{};
-        Array<UpsampleDispatch>   upsample_dispatches{};
-    };
-
     BloomPass(RasterContext& context);
     BloomPass(ShaderManager& manager, EPixelFormat scene_format);
 
-    [[nodiscard]] RecordParameters
-    Prepare(const RasterContext& context, const RasterConfig& raster_config, TextureWithHandle input_texture)
-        const;
-    [[nodiscard]] RecordParameters
-    Prepare(bool enabled, TextureWithHandle input, TextureWithHandle downsample, TextureWithHandle upsample)
-        const;
-    void RecordPrefilter(CommandList& cmd_list, const RecordParameters& parameters);
-    void RecordDownsample(CommandList& cmd_list, const RecordParameters& parameters, uint32 mip);
-    void RecordUpsample(CommandList& cmd_list, const RecordParameters& parameters, uint32 mip);
-    void RecordApply(CommandList& cmd_list, const RecordParameters& parameters);
-    void Record(CommandList& cmd_list, const RecordParameters& parameters);
     RenderGraph::PassHandle AddRecordPasses(
-        RenderGraph&                      graph,
-        GraphResources                    resources,
-        RGPreparedValue<RecordParameters> prepared,
-        uint32                            mip_count
+        RenderGraph&   graph,
+        GraphResources resources,
+        uint32         mip_count
     );
-    void AddToGraph(
-        RenderGraph&         graph,
-        const RasterContext& context,
-        const RasterConfig&  raster_config,
-        TextureWithHandle    input_texture,
-        GraphResources       resources
+    GraphResources AddToGraph(
+        RenderGraph&               graph,
+        bool                       enabled,
+        RenderGraph::TextureHandle input,
+        Extent2D                   extent
     );
-
-    TextureWithHandle
-    Process(RasterContext& context, const RasterConfig& raster_config, TextureWithHandle input_texture);
 
 private:
+    void RecordPrefilter(CommandList& commands, const TextureRef& input, const TextureRef& downsample);
+    void RecordDownsample(CommandList& commands, const TextureRef& downsample, uint32 mip);
+    void RecordUpsample(
+        CommandList&      commands,
+        const TextureRef& source,
+        const TextureRef& downsample,
+        const TextureRef& upsample,
+        uint32            mip
+    );
+    void RecordApply(CommandList& commands, const TextureRef& input, const TextureRef& bloom);
+
     BloomPassPrefilterPipeline  prefilter_pipeline;
     BloomPassUpSamplePipeline   upsample_pipeline;
     BloomPassDownSamplePipeline downsample_pipeline;

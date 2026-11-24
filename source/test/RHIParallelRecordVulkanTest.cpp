@@ -31,6 +31,7 @@
 
 #include "misc/Types.h"
 #include <algorithm>
+#include <bit>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -2514,28 +2515,26 @@ void RunCompiledBloom(ShaderManager& manager, bool parallel) {
     using Graph                               = RenderGraph;
     auto&                              device = RenderDevice::Get();
     BloomPass                          bloom(manager, PF_R32G32B32A32_SFLOAT);
-    constexpr uint32                   width = 64, height = 32;
-    std::array<float4, width * height> pixels{};
-    for (uint32 y = 0; y < height; ++y) {
-        for (uint32 x = 0; x < width; ++x) {
-            pixels[y * width + x] = float4(2.0f + 10.0f * (x % 8), 1.0f + 3.0f * y, 12.0f, 1.0f);
+    RenderGraphResourcePool            pool{};
+    RenderGraphTransientAllocator      allocator(pool);
+    auto                               run = [&](uint32 mip_count, bool merge, uint32 width = 64, uint32 height = 32, bool transient = false, bool enabled = true) {
+        Array<float4> pixels(width * height);
+        for (uint32 y = 0; y < height; ++y) {
+            for (uint32 x = 0; x < width; ++x) {
+                pixels[y * width + x] = float4(32.0f + 10.0f * (x % 8), 24.0f + 3.0f * y, 12.0f, 1.0f);
+            }
         }
-    }
-    auto run = [&](uint32 mip_count, bool merge) {
         const auto usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT |
                            ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC;
         auto input =
             device.CreateTexture("bloom_scene", Extent3D(width, height, 1), PF_R32G32B32A32_SFLOAT, usage);
-        auto down = device.CreateTexture(
-            "bloom_down", Extent3D(width, height, 1), PF_B10G11R11_UFLOAT_PACK32, usage, mip_count
-        );
-        auto up = device.CreateTexture(
-            "bloom_up", Extent3D(width, height, 1), PF_B10G11R11_UFLOAT_PACK32, usage, mip_count
-        );
-        auto                  params = bloom.Prepare(true, {input, 0, {}}, {down, 0, {}}, {up, 0, {}});
+        auto                  down = transient ? TextureRef{} : device.CreateTexture("bloom_down", Extent3D(width, height, 1), PF_B10G11R11_UFLOAT_PACK32, usage, mip_count);
+        auto                  up   = transient ? TextureRef{} : device.CreateTexture("bloom_up", Extent3D(width, height, 1), PF_B10G11R11_UFLOAT_PACK32, usage, mip_count);
         Array<ReadbackFuture> readbacks;
         auto                  readback = [&](CommandList& commands) {
             readbacks.push_back(commands.Readback(input->GetView()));
+            if (transient)
+                return;
             for (uint32 mip = 0; mip < mip_count; ++mip)
                 readbacks.push_back(commands.Readback(down->GetView(mip, 1)));
             // The last upsample mip is never produced or consumed.
@@ -2546,10 +2545,12 @@ void RunCompiledBloom(ShaderManager& manager, bool parallel) {
             Graph                     graph("CompiledBloom");
             BloomPass::GraphResources resources{
                 .input            = graph.ImportTexture("Scene", input, {}),
-                .downsample_chain = graph.ImportTexture("Down", down, {.mip_count = mip_count}),
-                .upsample_chain   = graph.ImportTexture("Up", up, {.mip_count = mip_count})
+                .downsample_chain = transient ? Graph::TextureHandle{} : graph.ImportTexture("Down", down, {.mip_count = mip_count}),
+                .upsample_chain   = transient ? Graph::TextureHandle{} : graph.ImportTexture("Up", up, {.mip_count = mip_count})
             };
             for (auto resource : {resources.input, resources.downsample_chain, resources.upsample_chain}) {
+                if (!resource.IsValid())
+                    continue;
                 graph.SetInitialState(
                     resource, Graph::TextureBoundary::Undefined, Graph::QueueRole::None, Graph::AccessMode::None
                 );
@@ -2561,22 +2562,32 @@ void RunCompiledBloom(ShaderManager& manager, bool parallel) {
                         .Write(resources.input, Graph::TextureAccessType::TransferDestination);
                 },
                 [=](CommandList& commands) {
-                    commands.CopyFrom(OwnedBytes(pixels), input->GetView());
+                    Array<Moer::byte> bytes(pixels.size() * sizeof(float4));
+                    std::memcpy(bytes.data(), pixels.data(), bytes.size());
+                    commands.CopyFrom(std::move(bytes), input->GetView());
                 },
                 Graph::PassRecordPolicy::ParallelAllowed
             );
-            auto prepared = graph.AddSetupPass("Bloom.Prepare", params, [](const auto& value) {
-                return value;
-            });
-            bloom.AddRecordPasses(graph, resources, prepared, mip_count);
+            if (transient) {
+                resources = bloom.AddToGraph(graph, enabled, resources.input, Extent2D(width, height));
+                if (!enabled && (resources.downsample_chain.IsValid() || resources.upsample_chain.IsValid())) {
+                    throw std::runtime_error("disabled Bloom created intermediate resources");
+                }
+                if (enabled && (resources.upsample_chain.IsValid() != (mip_count > 1))) {
+                    throw std::runtime_error("Bloom created an unnecessary upsample chain");
+                }
+            } else {
+                bloom.AddRecordPasses(graph, resources, mip_count);
+            }
             graph.AddRecordPass(
                 "Readback",
                 [=](Graph::PassBuilder& builder) {
                     builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::GpuWorkType::Transfer)
                         .Read(resources.input, Graph::TextureAccessType::TransferSource)
-                        .Read(resources.downsample_chain, Graph::TextureAccessType::TransferSource)
                         .SideEffect();
-                    if (mip_count > 1) {
+                    if (!transient)
+                        builder.Read(resources.downsample_chain, Graph::TextureAccessType::TransferSource);
+                    if (!transient && mip_count > 1) {
                         builder.Read(
                             resources.upsample_chain,
                             Graph::TextureAccessType::TransferSource,
@@ -2593,13 +2604,14 @@ void RunCompiledBloom(ShaderManager& manager, bool parallel) {
                 Graph::QueueRole::Graphics,
                 Graph::AccessMode::Read
             );
-            graph.Export(
-                resources.downsample_chain,
-                Graph::TextureAccessType::TransferSource,
-                Graph::QueueRole::Graphics,
-                Graph::AccessMode::Read
-            );
-            if (mip_count > 1) {
+            if (!transient)
+                graph.Export(
+                    resources.downsample_chain,
+                    Graph::TextureAccessType::TransferSource,
+                    Graph::QueueRole::Graphics,
+                    Graph::AccessMode::Read
+                );
+            if (!transient && mip_count > 1) {
                 graph.Export(
                     resources.upsample_chain,
                     Graph::TextureAccessType::TransferSource,
@@ -2608,13 +2620,13 @@ void RunCompiledBloom(ShaderManager& manager, bool parallel) {
                     Graph::TextureRange::Mips(0, mip_count - 1)
                 );
             }
-            if (!graph.Compile() || graph.GetCompiledPlan().frontend_record_units.size() != 2 * mip_count + 2) {
+            if (!graph.Compile() || graph.GetCompiledPlan().frontend_record_units.size() != (enabled ? 2 * mip_count + 2 : 2)) {
                 throw std::runtime_error("compiled bloom graph failed: " + graph.GetCompileError());
             }
             if (merge) {
                 CommandList commands;
                 commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-                if (!graph.RecordAndMergeFrontendCommands(commands, parallel)) {
+                if (!graph.RecordAndMergeFrontendCommands(commands, parallel, {}, &allocator)) {
                     throw std::runtime_error("merged bloom graph failed: " + graph.GetCompileError());
                 }
                 RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
@@ -2623,7 +2635,8 @@ void RunCompiledBloom(ShaderManager& manager, bool parallel) {
                            parallel,
                            {},
                            Graph::ActiveRecordingOptions{
-                               .enabled = true, .state_ownership = ERHIResourceStateOwnership::Compiled}
+                               .enabled = true, .transient_allocator = &allocator, .state_ownership = ERHIResourceStateOwnership::Compiled
+                           }
                        )) {
                 throw std::runtime_error("compiled bloom graph failed: " + graph.GetCompileError());
             }
@@ -2636,11 +2649,20 @@ void RunCompiledBloom(ShaderManager& manager, bool parallel) {
                 added_energy |= (*scene)[i * 4] > pixels[i].x + 0.001f;
             }
         }
-        if (!scene || scene->size() != width * height * 4 || !added_energy ||
+        if (!scene || scene->size() != width * height * 4 || (enabled && !added_energy) ||
             !std::all_of(scene->begin(), scene->end(), [](float value) {
                 return std::isfinite(value);
             })) {
-            throw std::runtime_error("bloom did not add finite highlight energy to the scene");
+            throw std::runtime_error(std::format("Bloom output invalid: {}x{} mips={} transient={} enabled={}", width, height, mip_count, transient, enabled));
+        }
+        if (!enabled) {
+            for (size_t i = 0; i < pixels.size(); ++i) {
+                for (uint32 channel = 0; channel < 4; ++channel) {
+                    if ((*scene)[i * 4 + channel] != pixels[i][channel]) {
+                        throw std::runtime_error("disabled Bloom changed the scene");
+                    }
+                }
+            }
         }
         Array<Array<uint32>> snapshot;
         for (auto& future : readbacks) {
@@ -2648,6 +2670,9 @@ void RunCompiledBloom(ShaderManager& manager, bool parallel) {
             if (!data || data->empty())
                 throw std::runtime_error("bloom subresource readback failed");
             snapshot.push_back(std::move(*data));
+        }
+        if (pool.AvailableTextureCount() != pool.TextureCount()) {
+            throw std::runtime_error("Bloom resources remained retained after completion");
         }
         return snapshot;
     };
@@ -2662,6 +2687,29 @@ void RunCompiledBloom(ShaderManager& manager, bool parallel) {
             mip_count,
             2 * mip_count
         );
+    }
+    for (const auto size : {Extent2D(64, 32), Extent2D(1, 1), Extent2D(3, 5), Extent2D(1, 17)}) {
+        pool.Reset();
+        const uint32 mips      = std::min<uint32>(6, std::bit_width(std::max(size.width, size.height)));
+        const auto   reference = run(mips, false, size.width, size.height);
+        const auto   disabled  = run(mips, true, size.width, size.height, true, false);
+        if (pool.TextureCount() != 0)
+            throw std::runtime_error("disabled Bloom allocated from the pool");
+        const auto   active    = run(mips, false, size.width, size.height, true);
+        const uint32 allocated = pool.TextureCount();
+        const auto   merged    = run(mips, true, size.width, size.height, true);
+        if (reference.front() != active.front() || reference.front() != merged.front() ||
+            allocated != (mips > 1 ? 2u : 1u) || pool.TextureCount() != allocated) {
+            throw std::runtime_error("transient Bloom output or completion reuse differs from imported chains");
+        }
+        static_cast<void>(run(mips, true, size.width, size.height, true, false));
+        if (pool.TextureCount() != allocated)
+            throw std::runtime_error("disabled Bloom allocated after an enabled frame");
+        const auto reenabled = run(mips, true, size.width, size.height, true);
+        if (reference.front() != reenabled.front() || pool.TextureCount() != allocated) {
+            throw std::runtime_error("Bloom toggle did not reuse completed textures");
+        }
+        LOG_INFO("[TESTCASE][PASS] name=TransientBloom size={}x{} mips={} textures={} output=matched reuse=verified toggle=verified", size.width, size.height, mips, allocated);
     }
 }
 
@@ -2777,14 +2825,7 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
                 RenderGraph::AccessMode::Read,
                 RenderGraph::TextureRange::Mips(0, mip_count - 1)
             );
-            auto bloom_prepared = graph.AddSetupPass(
-                "Bloom.Prepare",
-                bloom->Prepare(true, params.input, {down, 0, {}}, {up, 0, {}}),
-                [](const auto& parameters) {
-                    return parameters;
-                }
-            );
-            bloom->AddRecordPasses(graph, bloom_resources, bloom_prepared, mip_count);
+            bloom->AddRecordPasses(graph, bloom_resources, mip_count);
         }
         auto prepared = graph.AddSetupPass("Prepare", params, [](const auto& parameters) {
             return parameters;

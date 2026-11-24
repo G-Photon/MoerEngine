@@ -38,22 +38,6 @@ namespace Moer::Render::Raster {
     X(TexHandle, aa_texture_3, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))     \
     X(TexHandle, aa_texture_4, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))     \
     X(TexHandle, aa_output, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))        \
-    X(TexHandle,                                                                                                \
-      bloom_downsample_chain,                                                                                   \
-      Tex2DTag,                                                                                                 \
-      TexConfig::Default(PF_B10G11R11_UFLOAT_PACK32)                                                            \
-          .Usage(E_SAMPLED_COLOR)                                                                               \
-          .Mips(6)                                                                                              \
-          .IndividualMips()                                                                                     \
-          .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE))                                                         \
-    X(TexHandle,                                                                                                \
-      bloom_upsample_chain,                                                                                     \
-      Tex2DTag,                                                                                                 \
-      TexConfig::Default(PF_B10G11R11_UFLOAT_PACK32)                                                            \
-          .Usage(E_SAMPLED_COLOR)                                                                               \
-          .Mips(6)                                                                                              \
-          .IndividualMips()                                                                                     \
-          .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE))                                                         \
     X(TexHandle, tonemapping_output, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_UNORM).Usage(E_SAMPLED_COLOR))    \
     X(TexHandle,                                                                                                \
       output,                                                                                                   \

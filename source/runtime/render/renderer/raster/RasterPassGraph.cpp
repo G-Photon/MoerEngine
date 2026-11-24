@@ -22,6 +22,8 @@
 #include "profile/ProfileScope.h"
 #include "renderer/common/UiCombinePass.h"
 
+#include <algorithm>
+#include <bit>
 #include <format>
 #include <functional>
 #include <utility>
@@ -919,35 +921,41 @@ void AaPass::AddToGraph(
     }
 }
 
-void BloomPass::AddToGraph(
-    RenderGraph& graph,
-    const RasterContext& context,
-    const RasterConfig& raster_config,
-    TextureWithHandle input_texture,
-    GraphResources resources
+BloomPass::GraphResources BloomPass::AddToGraph(
+    RenderGraph&               graph,
+    bool                       enabled,
+    RenderGraph::TextureHandle input,
+    Extent2D                   extent
 ) {
     MOER_PROFILE_SCOPE("Raster.AddToGraph.BloomPass");
-    if (!raster_config.bloom_enabled) {
-        return;
+    GraphResources resources{.input = input};
+    if (!enabled) {
+        return resources;
     }
-    auto prepared = graph.AddSetupPass(
-        "Bloom.Prepare",
-        std::move(input_texture),
-        [this, &context, &raster_config](const TextureWithHandle& input) {
-            return Prepare(context, raster_config, input);
-        }
-    );
-    if (!prepared.IsValid()) {
-        return;
+    if (extent.width == 0 || extent.height == 0) {
+        throw std::invalid_argument("Bloom requires a nonzero input extent");
     }
-
-    AddRecordPasses(
-        graph, resources, prepared, context.textures.bloom_downsample_chain.tex->GetNumMips()
-    );
+    const uint32                 mip_count = std::min<uint32>(6, std::bit_width(std::max(extent.width, extent.height)));
+    const RGTransientTextureDesc desc{
+        .extent    = Extent3D(extent),
+        .format    = PF_B10G11R11_UFLOAT_PACK32,
+        .usage     = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT,
+        .mip_count = mip_count,
+    };
+    // The graph owns logical lifetimes; recorded commands retain the physical
+    // textures until Completion, after which the existing pool may reuse them.
+    resources.downsample_chain = graph.CreateTransientTexture("Bloom.DownsampleChain", desc);
+    if (mip_count > 1) {
+        resources.upsample_chain = graph.CreateTransientTexture("Bloom.UpsampleChain", desc);
+    }
+    AddRecordPasses(graph, resources, mip_count);
+    return resources;
 }
 
 RenderGraph::PassHandle BloomPass::AddRecordPasses(
-    RenderGraph& graph, GraphResources resources, RGPreparedValue<RecordParameters> prepared, uint32 mip_count
+    RenderGraph&   graph,
+    GraphResources resources,
+    uint32         mip_count
 ) {
     using Range = RenderGraph::TextureRange;
     using State = RenderGraph::TextureAccessType;
@@ -963,8 +971,12 @@ RenderGraph::PassHandle BloomPass::AddRecordPasses(
                 .Read(resources.input, State::Sampled, Range::Mips(0, 1))
                 .Write(resources.downsample_chain, State::ColorAttachment, Range::Mips(0, 1));
         },
-        [this, prepared](CommandList& commands) {
-            RecordPrefilter(commands, prepared.Get());
+        [this, &graph, resources](CommandList& commands) {
+            RecordPrefilter(
+                commands,
+                graph.GetPhysicalTexture(resources.input),
+                graph.GetPhysicalTexture(resources.downsample_chain)
+            );
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
     );
@@ -976,8 +988,8 @@ RenderGraph::PassHandle BloomPass::AddRecordPasses(
                     .Read(resources.downsample_chain, State::Sampled, Range::Mips(mip - 1, 1))
                     .Write(resources.downsample_chain, State::ColorAttachment, Range::Mips(mip, 1));
             },
-            [this, prepared, mip](CommandList& commands) {
-                RecordDownsample(commands, prepared.Get(), mip);
+            [this, &graph, resources, mip](CommandList& commands) {
+                RecordDownsample(commands, graph.GetPhysicalTexture(resources.downsample_chain), mip);
             },
             RenderGraph::PassRecordPolicy::ParallelAllowed
         );
@@ -993,8 +1005,14 @@ RenderGraph::PassHandle BloomPass::AddRecordPasses(
                     .Read(resources.downsample_chain, State::Sampled, Range::Mips(mip, 1))
                     .Write(resources.upsample_chain, State::ColorAttachment, Range::Mips(mip, 1));
             },
-            [this, prepared, mip](CommandList& commands) {
-                RecordUpsample(commands, prepared.Get(), mip);
+            [this, &graph, resources, source, mip](CommandList& commands) {
+                RecordUpsample(
+                    commands,
+                    graph.GetPhysicalTexture(source),
+                    graph.GetPhysicalTexture(resources.downsample_chain),
+                    graph.GetPhysicalTexture(resources.upsample_chain),
+                    mip
+                );
             },
             RenderGraph::PassRecordPolicy::ParallelAllowed
         );
@@ -1007,8 +1025,12 @@ RenderGraph::PassHandle BloomPass::AddRecordPasses(
                 // Additive blending loads the existing scene color.
                 .ReadWrite(resources.input, State::ColorAttachment, Range::Mips(0, 1));
         },
-        [this, prepared](CommandList& commands) {
-            RecordApply(commands, prepared.Get());
+        [this, &graph, resources, mip_count](CommandList& commands) {
+            RecordApply(
+                commands,
+                graph.GetPhysicalTexture(resources.input),
+                graph.GetPhysicalTexture(mip_count == 1 ? resources.downsample_chain : resources.upsample_chain)
+            );
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
     );
