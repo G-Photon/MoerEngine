@@ -81,6 +81,17 @@ build-run config="Debug" exe="MoerEditor" threads=default_threads: (build config
 
 generate-build-run config="Debug" exe="MoerEditor" threads=default_threads: (generate) (build config exe threads) (run config exe threads)
 
+# MARK: release notes
+
+changelog output="CHANGELOG.md":
+    git-cliff --config cliff.toml --output "{{output}}"
+
+release-notes version:
+    git-cliff --config cliff.toml --unreleased --tag "{{version}}" --strip header
+
+next-version:
+    git-cliff --config cliff.toml --bumped-version
+
 # MARK: aliases
 
 alias gbr := generate-build-run

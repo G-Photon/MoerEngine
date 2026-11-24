@@ -169,6 +169,8 @@ class ComponentB {
 
 Commit信息，请遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/v1.0.0/) 规范。
 
+版本 tag、更新日志生成和发布说明预览见 [版本与更新日志](RELEASE.md)。
+
 ### 第三方库与依赖项
 
 引入第三方库时，请检查对应的协议。如果是MIT、Apache等宽松协议，可以直接引入。否则，请先和维护者沟通。
