@@ -36,6 +36,12 @@ add_subdirectory(math)
 add_subdirectory(remote)
 add_subdirectory(scripting)
 
+add_executable(TestConfigPath "ConfigPathTest.cpp")
+target_link_libraries(TestConfigPath PRIVATE Moer::Core)
+set_target_properties(TestConfigPath PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME ConfigPathContract COMMAND $<TARGET_FILE:TestConfigPath>)
+set_tests_properties(ConfigPathContract PROPERTIES TIMEOUT 30)
+
 add_executable(TestHashValue "HashValueTest.cpp")
 target_link_libraries(TestHashValue PRIVATE Moer::Core)
 set_target_properties(TestHashValue PROPERTIES FOLDER ${moer_test_folder})

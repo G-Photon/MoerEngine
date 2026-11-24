@@ -9,7 +9,7 @@ namespace Moer::Config {
 GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_path) {
     GlobalConfig loaded_config{};
 
-    const auto toml_config = toml::parse_file(toml_path.data());
+    const auto toml_config = toml::parse_file(toml_path);
 
     // TODO: 后续可根据 GlobalConfig 的结构自动生成以下字段加载代码。
 
