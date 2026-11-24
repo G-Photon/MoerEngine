@@ -59,6 +59,8 @@ GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_p
         toml_config.at_path("engine.render.default_render_method").value_or("Raster");
     loaded_config.engine.render.raster.enable_shadow =
         toml_config.at_path("engine.render.raster.enable_shadow").value_or(true);
+    loaded_config.engine.render.raster.skybox_path =
+        toml_config.at_path("engine.render.raster.skybox_path").value_or("Skybox/WaterScene");
     loaded_config.engine.render.raster.low_quality_mode =
         toml_config.at_path("engine.render.raster.low_quality_mode").value_or(false);
     loaded_config.engine.render.raster.render_graph_debug_dump =

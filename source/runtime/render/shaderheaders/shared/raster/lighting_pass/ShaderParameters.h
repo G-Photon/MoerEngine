@@ -269,6 +269,13 @@ struct CsmGizmoParam {
     float4   camera_position_thickness; // xyz = scene camera position, w = world-space line thickness
 };
 
+struct IblPrecomputeParam {
+    uint  face;
+    uint  mode;
+    float roughness;
+    uint  sample_count;
+};
+
 struct MaterialPassBindlessParam {
     float3 extra_ambient_color;
     uint   enable_extra_ambient;
@@ -282,6 +289,8 @@ struct MaterialPassBindlessParam {
     uint   shading_mode;
     uint   cubemap_handle;
     uint   shadow_mask_handle;
+    float  ibl_intensity;
+    float  ibl_max_specular_lod;
 };
 
 // UBO (ConstantBuffer)，需要遵循std140

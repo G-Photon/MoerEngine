@@ -99,10 +99,10 @@ namespace Moer::Render::Raster {
     X(TexHandle,                                                                                                \
       cubemap_tex,                                                                                              \
       TexCubeTag,                                                                                               \
-      TexConfig::Asset("Skybox/WaterScene")                                                                     \
-          .Format(PF_R8G8B8A8_UNORM)                                                                            \
+      TexConfig::Asset(ConfigManager::GetInstance().GetConfig().engine.render.raster.skybox_path)                                                                     \
+          .Format(PF_R8G8B8A8_SRGB)                                                                            \
           .Usage(E_S_TRANSFER)                                                                                  \
-          .SamplerConfig(SF_LINEAR, SAM_REPEAT))
+          .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE))
 
 // Textures that also have a half-resolution (size/2) variant (NAME_half)
 // Used for AO half-resolution mode

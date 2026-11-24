@@ -229,9 +229,16 @@ set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_executable(TestShaderEffectsSmoke "ShaderEffectsSmokeTest.cpp")
 target_link_libraries(TestShaderEffectsSmoke PRIVATE Moer::Runtime)
 set_target_properties(TestShaderEffectsSmoke PROPERTIES FOLDER ${moer_test_folder})
+
+add_executable(TestIblLighting "IblLightingTest.cpp")
+target_link_libraries(TestIblLighting PRIVATE Moer::Runtime)
+set_target_properties(TestIblLighting PROPERTIES FOLDER ${moer_test_folder})
 # Opt in: requires a Vulkan ray-tracing GPU and the configured scene assets.
 option(MOER_SHADER_GPU_TESTS "Register shader effect rendering smoke tests" OFF)
 if(MOER_SHADER_GPU_TESTS)
+    add_test(NAME IblLighting COMMAND $<TARGET_FILE:TestIblLighting>)
+    set_tests_properties(IblLighting PROPERTIES
+        WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 90 LABELS "gpu;shader")
     add_test(NAME ShaderEffectsSmoke COMMAND $<TARGET_FILE:TestShaderEffectsSmoke>)
     set_tests_properties(ShaderEffectsSmoke PROPERTIES
         WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 180 LABELS "gpu;shader")

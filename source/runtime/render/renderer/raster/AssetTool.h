@@ -5,8 +5,10 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
 #include <config/ConfigManager.h>
+#include <memory>
 #include <shader/ShaderResourceManager.h>
 #include <stb_image.h>
+#include <stdexcept>
 
 namespace Moer::Render::Raster {
 struct Tex2DTag {};
@@ -143,37 +145,40 @@ public:
             "posx.jpg", "negx.jpg", "posy.jpg", "negy.jpg", "posz.jpg", "negz.jpg"
         };
 
-        TextureView skybox_view;
-
+        const auto free_image = [](ubyte* data) {
+            stbi_image_free(data);
+        };
+        std::array<std::unique_ptr<ubyte, decltype(free_image)>, 6> images;
+        int                                                         face_size = 0;
         for (size_t i = 0; i < skybox_faces.size(); ++i) {
             std::string filepath = (ConfigManager::GetInstance().GetEditorResourcePath() / "textures" /
                                     cfg.asset_path_relative / skybox_faces[i])
                                        .string();
 
-            int    width, height;
-            ubyte* data = LoadImageData(filepath, width, height);
-
-            if (!data)
-                return;
-
-            if (i == 0) {
-                out_tex     = device.CreateCubeMap(name, Extent2D(width, height), cfg.format, cfg.usage);
-                skybox_view = TextureView(out_tex);
+            int width = 0, height = 0;
+            images[i].reset(LoadImageData(filepath, width, height));
+            if (!images[i]) {
+                throw std::runtime_error(std::format("Failed to load skybox face: {}", filepath));
             }
+            if (width <= 0 || width != height || (i != 0 && width != face_size)) {
+                throw std::runtime_error(std::format("Skybox faces must be square and have identical dimensions: {} is {}x{} (first face {}x{})", filepath, width, height, face_size, face_size));
+            }
+            face_size = width;
+        }
 
-            UploadTextureData(
-                cmd_list, skybox_view.Slice(i), data, width, height, std::format("Skybox Cubemap #{}", i)
-            );
-
-            LOG_DEBUG(
-                "Load CubeMap Texture: {}_{}, size ({}, {}) from \"{}\"",
-                name,
-                skybox_faces[i],
-                width,
-                height,
-                filepath
+        // Validate all faces before creating a texture or recording any uploads.
+        auto texture = device.CreateCubeMap(name, Extent2D(face_size, face_size), cfg.format, cfg.usage);
+        for (uint32 face = 0; face < skybox_faces.size(); ++face) {
+            RecordNewGraphicsTextureUpload(
+                cmd_list,
+                std::span<const byte>(reinterpret_cast<const byte*>(images[face].get()), size_t(face_size) * face_size * 4),
+                texture->GetView().Slice(face, 1),
+                std::format("Skybox Cubemap #{}", face)
             );
         }
+        // CopyFrom owns the upload bytes; decoded images can be released here.
+        out_tex = std::move(texture);
+        LOG_DEBUG("Load CubeMap Texture: {}, size {}x{}, from {}", name, face_size, face_size, cfg.asset_path_relative);
     }
 
     template<typename IntentTag, typename T_Holder>

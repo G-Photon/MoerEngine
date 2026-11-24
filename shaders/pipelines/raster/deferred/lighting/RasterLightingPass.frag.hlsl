@@ -5,6 +5,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 #include "materials/Brdf.hlsli"
 #include "pipelines/raster/deferred/lighting/Lighting.hlsli"
+#include "pipelines/raster/deferred/lighting/Ibl.hlsli"
 #include "pipelines/raster/deferred/lighting/ProbeGI.hlsli"
 #include "pipelines/raster/deferred/lighting/shadows/CSM.hlsli"
 
@@ -12,6 +13,10 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "features/gaussian/ShadowSampling.hlsli"
 
 [[vk::binding(0, 0)]] ConstantBuffer<Moer::LightingData> lighting_data;
+[[vk::binding(1, 0)]] TextureCube<float4> ibl_diffuse;
+[[vk::binding(2, 0)]] TextureCube<float4> ibl_specular;
+[[vk::binding(3, 0)]] Texture2D<float4> ibl_brdf;
+[[vk::binding(4, 0)]] SamplerState ibl_sampler;
 #include "shared/raster/lighting_pass/Constants.h"
 DEFINE_SHADER_CONSTANTS(LIGHTING_PASS_CONSTANTS)
 
@@ -83,6 +88,11 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     }
 
     float3 color = light_ctx.GetResult();
+    if (moer_constants.param.ibl_intensity > 0) {
+        color += EvaluateIbl(ibl_diffuse, ibl_specular, ibl_brdf, ibl_sampler,
+            N, V, albedo, metallic, roughness, metal_rough_ao.z,
+            moer_constants.param.ibl_max_specular_lod) * moer_constants.param.ibl_intensity;
+    }
 
     float3 probe_gi = ProbeGIEvaluateDiffuse(lighting_data, position, N, brdf_ctx.albedo, metallic, shadow);
     color += probe_gi;

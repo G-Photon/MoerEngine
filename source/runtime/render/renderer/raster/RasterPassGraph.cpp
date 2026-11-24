@@ -451,6 +451,15 @@ void LightingPass::AddToGraph(
     GraphResources resources
 ) {
     MOER_PROFILE_SCOPE("Raster.AddToGraph.LightingPass");
+    if (ui_config.ibl_enabled)
+        ibl_environment.Update(context.textures.cubemap_tex.tex);
+    Array<RenderGraph::TextureHandle> ibl_textures;
+    if (ui_config.ibl_enabled) {
+        for (const auto& texture : {ibl_environment.GetDiffuse(), ibl_environment.GetSpecular(), ibl_environment.GetBrdf()}) {
+            if (texture)
+                ibl_textures.push_back(ImportRasterTexture(graph, "Lighting.IBL", texture.Get()));
+        }
+    }
     auto prepared = graph.AddSetupPass(
         "Lighting.Prepare",
         uint8{0},
@@ -476,7 +485,9 @@ void LightingPass::AddToGraph(
     }
     graph.AddRecordPass(
         "Lighting",
-        [resources, shadows, probes, emu, eavg, gaussian_textures, gaussian_data](RenderGraph::PassBuilder& builder) {
+        [resources, shadows, probes, emu, eavg, gaussian_textures, gaussian_data, ibl_textures](RenderGraph::PassBuilder& builder) {
+            for (auto texture : ibl_textures)
+                builder.Read(texture, RenderGraph::TextureAccessType::Sampled);
             for (auto texture : gaussian_textures) {
                 builder.Read(texture, RenderGraph::TextureAccessType::Sampled);
             }

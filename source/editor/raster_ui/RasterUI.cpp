@@ -363,6 +363,12 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    if (ImGui::TreeNode("Image Based Lighting")) {
+        ImGui::Checkbox("Enable IBL", &m_config.ibl_enabled);
+        ImGui::SliderFloat("IBL Intensity", &m_config.ibl_intensity, 0.0f, 5.0f);
+        ImGui::TreePop();
+    }
+
     // MARK: Probe GI
     if (ImGui::TreeNode("Probe GI", "Probe GI: [%s]", m_config.probe_gi_enabled ? "Enable" : "Disable")) {
         const auto clamp_probe_counts = [](ProbeVolumeConfig& volume) {

@@ -56,6 +56,7 @@ struct CORE_API GlobalConfig {
 
             struct Raster {
                 bool enable_shadow;
+                std::string skybox_path = "Skybox/WaterScene";
                 bool low_quality_mode;
                 bool render_graph_debug_dump;
                 bool render_graph_parallel_recording;

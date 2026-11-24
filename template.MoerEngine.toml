@@ -44,6 +44,7 @@ default_render_method = "Raster"
 # default_render_method = "Raytracing"
 
 [engine.render.raster]
+skybox_path = "Skybox/WaterScene" # Folder containing posx/negx/posy/negy/posz/negz.jpg
 # RDG compilation is mandatory; parallel recording only changes CPU scheduling.
 enable_shadow = true
 render_graph_debug_dump = false

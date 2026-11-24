@@ -7,6 +7,7 @@
 #include "shaderheaders/shared/raster/lighting_pass/Constants.h"
 
 #include "RasterConfig.h"
+#include "IblEnvironment.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
 #include "rendergraph/RenderGraph.h"
@@ -19,7 +20,11 @@ public:
     DEFINE_SHADER_BUFFER(lighting_data);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_CONSTANTS(LIGHTING_PASS_CONSTANTS);
-    DEFINE_SHADER_ARGS(lighting_data, bdls, param, extra_ambient_intensity);
+    DEFINE_SHADER_TEX(ibl_diffuse);
+    DEFINE_SHADER_TEX(ibl_specular);
+    DEFINE_SHADER_TEX(ibl_brdf);
+    DEFINE_SHADER_SAMPLER(ibl_sampler);
+    DEFINE_SHADER_ARGS(lighting_data, bdls, param, extra_ambient_intensity, ibl_diffuse, ibl_specular, ibl_brdf, ibl_sampler);
 };
 
 class LightingPass {
@@ -55,12 +60,13 @@ public:
         TextureRef                metal_rough_ao_owner{};
         DepthBufferRef            depth_owner{};
         TextureRef                cubemap_owner{};
+        TextureRef                ibl_diffuse{}, ibl_specular{}, ibl_brdf{};
         TextureRef                shadow_mask_owner{};
         TextureRef                output{};
         Rect2D                    render_area{};
     };
 
-    LightingPass(RasterContext& context) {
+    LightingPass(RasterContext& context) : ibl_environment(context.device, context.manager) {
         GfxPsoCreateInfo pipeline_info(
             RHIRasterizeInfo::Preset(),
             {},
@@ -91,6 +97,13 @@ public:
         pass_param.light_buf_hdl      = gpu_scene_res.light_buf.hdl;
         pass_param.cubemap_handle     = context.textures.cubemap_tex.hdl;
         pass_param.shadow_mask_handle = context.textures.shadow_mask.hdl;
+        if (ui_config.ibl_enabled && ibl_environment.GetDiffuse()) {
+            pass_param.ibl_intensity        = std::max(0.0f, ui_config.ibl_intensity);
+            pass_param.ibl_max_specular_lod = float(ibl_environment.GetSpecular()->GetNumMips() - 1);
+            parameters.ibl_diffuse          = ibl_environment.GetDiffuse();
+            parameters.ibl_specular         = ibl_environment.GetSpecular();
+            parameters.ibl_brdf             = ibl_environment.GetBrdf();
+        }
 
         parameters.lighting_data        = context.lighting_data_buffer.buf;
         parameters.light_buffer_owner   = gpu_scene_res.light_buf.buf;
@@ -113,7 +126,11 @@ public:
                 parameters.lighting_data,
                 parameters.bindless,
                 parameters.pass_param,
-                parameters.extra_ambient_intensity
+                parameters.extra_ambient_intensity,
+                parameters.ibl_diffuse ? parameters.ibl_diffuse : parameters.cubemap_owner,
+                parameters.ibl_specular ? parameters.ibl_specular : parameters.cubemap_owner,
+                parameters.ibl_brdf ? parameters.ibl_brdf : parameters.base_color_owner,
+                Sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE}
             )
             .Draw(
                 "Lighting Pass",
@@ -132,6 +149,7 @@ public:
 
 private:
     PbrMaterialShadingPipeline pipeline;
+    IblEnvironment             ibl_environment;
 };
 
 } // namespace Moer::Render::Raster

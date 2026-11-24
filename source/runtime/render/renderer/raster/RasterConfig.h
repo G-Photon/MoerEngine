@@ -161,6 +161,9 @@ struct RasterConfig {
     EBrdfGMode   shading_brdf_G_mode               = EBrdfGMode::VIS_UE4;
     bool         shading_brdf_G_is_ibl             = false; // 是否使用IBL的Fresnel近似
 
+    bool  ibl_enabled   = false;
+    float ibl_intensity = 1.0f;
+
     // MARK: Probe GI
     bool   probe_gi_enabled                   = false;
     int    probe_gi_volume_count              = 2;
