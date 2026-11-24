@@ -975,6 +975,16 @@ if (TARGET LibTorch)
     set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 endif()
 
+# Compile the private loader in the test, keeping its API private to Render.
+add_executable(TestDdsImage "DdsImageTest.cpp"
+    "${moer_source_dir}/runtime/render/scene/loader/io/ImageIO.cpp"
+    "${moer_source_dir}/runtime/render/scene/loader/io/KtxImageHelper.cpp")
+target_link_libraries(TestDdsImage PRIVATE Moer::Render)
+set_target_properties(TestDdsImage PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME DdsImageFormats COMMAND $<TARGET_FILE:TestDdsImage> --formats)
+add_test(NAME DdsImagePayload COMMAND $<TARGET_FILE:TestDdsImage> --payload)
+set_tests_properties(DdsImageFormats DdsImagePayload PROPERTIES TIMEOUT 30)
+
 if (TARGET TensorRT)
     set(test_target TestTensorRT)
     add_executable(${test_target} TensorRTTest.cpp)

@@ -7,8 +7,10 @@
 #include "rhi/RHICommon.h"
 
 #include <cassert>
+#include <bit>
 #include <dds.hpp>
 #include <gl_format.h>
+#include <limits>
 #include <numeric>
 #include <stb/stb_image_resize2.h>
 
@@ -74,7 +76,7 @@ EPixelFormat ConvertFormatFromDxgiFormat(DXGI_FORMAT format, bool alpha_flag) {
         case DXGI_FORMAT_R8G8_UNORM:
             return PF_R8G8_UNORM;
         case DXGI_FORMAT_R8G8_UINT:
-            return PF_R8G8_SINT;
+            return PF_R8G8_UINT;
         case DXGI_FORMAT_R8G8_SNORM:
             return PF_R8G8_SNORM;
         case DXGI_FORMAT_R8G8_SINT:
@@ -204,8 +206,12 @@ EPixelFormat ConvertFormatFromDDSFormat(uint32 format) {
 /// Generate mipmaps for the given image data
 /// @param _desc Image description containing the base image data
 static void Generatemipmaps(ImageReadDesc& _desc, bool _is_generate_mipmaps) {
-    if (_desc.mips > 1)
-        return; // Mipmaps already present
+    if (!_is_generate_mipmaps || _desc.mips > 1)
+        return;
+    // This byte resampler cannot decode compressed blocks or interpret other
+    // component types. Preserve their source data and mip count.
+    if (_desc.format != PF_R8G8B8A8_UNORM && _desc.format != PF_R8G8B8A8_SRGB)
+        return;
 
     // Setup variables
     Extent3D extent          = {_desc.width, _desc.height, _desc.layers};
@@ -387,20 +393,70 @@ ImageReadDesc ImageIO::ReadFromFile(
         }
         Generatemipmaps(desc, _is_generate_mipmaps);
     } else if (path_str.ends_with("dds")) {
+        std::error_code file_error;
+        const auto      file_size = std::filesystem::file_size(_path, file_error);
+        if (file_error || file_size < sizeof(uint32) + sizeof(dds::FileHeader) ||
+            file_size > std::numeric_limits<uint32>::max()) {
+            LOG_ERROR("Invalid DDS file size: {}", path_str);
+            return desc;
+        }
         dds::Image image;
         auto       result = dds::readFile(path_str, &image);
-        assert(result == dds::Success);
+        if (result != dds::Success) {
+            LOG_ERROR("Failed to read DDS texture: {}", path_str);
+            return desc;
+        }
+        dds::FileHeader header{};
+        memcpy(&header, image.data.data() + sizeof(uint32), sizeof(header));
+        bool is_cube = (header.caps2 & dds::Caps2Flags::Cubemap) != 0;
+        if (header.pixelFormat.fourCC == dds::DdsMagicNumber::DX10) {
+            dds::Dx10Header dx10{};
+            memcpy(&dx10, image.data.data() + sizeof(uint32) + sizeof(header), sizeof(dx10));
+            is_cube = is_cube || (dx10.miscFlags & 0x4u) != 0; // DDS_RESOURCE_MISC_TEXTURECUBE.
+        }
+        const auto format = ConvertFormatFromDxgiFormat(image.format, image.supportsAlpha);
+        if (format == PF_UNDEFINED || image.width == 0 || image.height == 0 ||
+            image.dimension == dds::ResourceDimension::Texture3D || is_cube || image.arraySize != 1 ||
+            image.mipmaps.size() != image.numMips ||
+            image.numMips > std::bit_width(std::max(image.width, image.height))) {
+            LOG_ERROR("Unsupported or invalid DDS texture: {}", path_str);
+            return desc;
+        }
+        // image.data includes the container headers. Only the validated spans
+        // returned by the parser contain texels/blocks, in mip order.
+        size_t     payload_size = 0;
+        const auto file_begin   = reinterpret_cast<uintptr_t>(image.data.data());
+        for (uint32 mip_index = 0; mip_index < image.numMips; ++mip_index) {
+            const auto mip           = image.mipmaps[mip_index];
+            const auto expected_size = Render::GetSizeFromPixelFormat(
+                format, uint3(std::max(1u, image.width >> mip_index), std::max(1u, image.height >> mip_index), 1)
+            );
+            const auto offset = reinterpret_cast<uintptr_t>(mip.data()) - file_begin;
+            if (offset > image.data.size() || mip.size() > image.data.size() - offset ||
+                mip.size() != expected_size || mip.size() > std::numeric_limits<uint32>::max() - payload_size) {
+                LOG_ERROR("Truncated or oversized DDS texture payload: {}", path_str);
+                return desc;
+            }
+            payload_size += mip.size();
+        }
+        if (payload_size == 0)
+            return desc;
         desc.width         = image.width;
         desc.height        = image.height;
-        desc.format        = ConvertFormatFromDxgiFormat(image.format, image.supportsAlpha);
+        desc.format        = format;
+        desc.channel       = Render::GetPixelFormatInfo(format).component_count;
         desc.layers        = image.depth;
         desc.mips          = image.numMips;
-        desc.data_size     = image.data.size();
+        desc.data_size     = static_cast<uint32>(payload_size);
         desc.data          = new uint8[desc.data_size];
         desc.data_callback = [](void* _ptr) {
             delete[] static_cast<uint8*>(_ptr);
         };
-        memcpy(desc.data, image.data.data(), desc.data_size);
+        size_t offset = 0;
+        for (const auto mip : image.mipmaps) {
+            memcpy(static_cast<uint8*>(desc.data) + offset, mip.data(), mip.size());
+            offset += mip.size();
+        }
         Generatemipmaps(desc, _is_generate_mipmaps);
     } else {
         LOG_ERROR("Unsupported image format");
@@ -424,7 +480,6 @@ ImageReadDesc ImageIO::ReadFromMemory(
         reinterpret_cast<int*>(&desc.channel),
         _desired_channal
     );
-
     // stbi_load 返回的 desc.channel 是原图通道数
     // _desired_channal 是期望通道数 和 当前data通道数
     desc.channel = _desired_channal;
