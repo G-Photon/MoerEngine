@@ -6,6 +6,22 @@
 [[vk::binding(0, 0)]] Texture2D    input_image;
 [[vk::binding(1, 0)]] Buffer<uint> exposure;
 [[vk::binding(2, 0)]] StructuredBuffer<uint> histogram;
+[[vk::binding(3, 0)]] Texture2D<float4> color_lut;
+[[vk::binding(4, 0)]] SamplerState color_lut_sampler;
+
+// N blue slices laid out horizontally in an N*N by N linear-color texture.
+float3 ApplyColorLUT(float3 color) {
+    float size = float(param.color_lut_size);
+    float3 coord = saturate(color) * (size - 1.0f);
+    float lower_slice = floor(coord.b);
+    float upper_slice = min(lower_slice + 1.0f, size - 1.0f);
+    float2 size_inv = 1.0f / float2(size * size, size);
+    float2 uv0 = float2(lower_slice * size + coord.r + 0.5f, coord.g + 0.5f) * size_inv;
+    float2 uv1 = float2(upper_slice * size + coord.r + 0.5f, coord.g + 0.5f) * size_inv;
+    float3 lower = color_lut.SampleLevel(color_lut_sampler, uv0, 0).rgb;
+    float3 upper = color_lut.SampleLevel(color_lut_sampler, uv1, 0).rgb;
+    return lerp(color, lerp(lower, upper, frac(coord.b)), param.color_lut_strength);
+}
 
 // ACES 拟合函数
 float3 ACESFilm(float3 x) {
@@ -101,5 +117,9 @@ float4 main(float2 uv : TEXCOORD0, float4 pos : SV_Position) : SV_TARGET {
         color = ManualExposure(hdr_color);
     }
 
+    [branch] if (param.color_lut_size > 1 && param.color_lut_strength > 0.0f &&
+                 !(param.ae.enabled && param.ae.debug_visualize)) {
+        color = ApplyColorLUT(color);
+    }
     return float4(color, 1.0f);
 }

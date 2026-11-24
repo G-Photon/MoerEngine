@@ -1525,6 +1525,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                      .exposure           = graph_resources.tonemapping_exposure,
                      .tonemapping_output = graph_resources.tonemapping_output}
                 );
+                status.color_grading_error = tonemapping_pass->GetColorGradingError();
                 processing_image          = raster_context.textures.tonemapping_output;
                 processing_image_resource = graph_resources.tonemapping_output;
 

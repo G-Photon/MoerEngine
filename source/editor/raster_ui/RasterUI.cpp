@@ -4,8 +4,10 @@
 // 提供 Raster 管线的功能控制项和轻量级运行时诊断信息。
 
 #include "config/ConfigManager.h"
+#include "log/LogSystem.h"
 
 #include <imgui.h>
+#include <nfd.hpp>
 #include <string_view>
 
 namespace Moer {
@@ -743,6 +745,33 @@ void RasterUI::ShowConfig() {
             ImGui::Checkbox("Enable Reinhard Tone Mapping", &m_config.tonemapping_reinhard_enabled);
         }
 
+        ImGui::TreePop();
+    }
+
+    if (ImGui::TreeNode("Color Grading")) {
+        ImGui::Checkbox("Enable LUT", &m_config.color_grading_enabled);
+        if (ImGui::Button("Open LUT...")) {
+            NFD::UniquePath       selected_path;
+            const nfdfilteritem_t filter{"Color LUT", "png"};
+            const auto            result = NFD::OpenDialog(selected_path, &filter, 1);
+            if (result == NFD_OKAY) {
+                m_config.color_grading_lut_path = selected_path.get();
+                m_config.color_grading_enabled  = true;
+            } else if (result == NFD_ERROR) {
+                LOG_ERROR("LUT file dialog: {}", NFD_GetError());
+            }
+        }
+        if (!m_config.color_grading_lut_path.empty()) {
+            ImGui::SameLine();
+            if (ImGui::Button("Clear LUT")) {
+                m_config.color_grading_lut_path.clear();
+            }
+            ImGui::TextWrapped("%s", m_config.color_grading_lut_path.c_str());
+        }
+        ImGui::SliderFloat("Strength", &m_config.color_grading_strength, 0.0f, 1.0f);
+        if (!m_status.color_grading_error.empty()) {
+            ImGui::TextWrapped("%s", m_status.color_grading_error.c_str());
+        }
         ImGui::TreePop();
     }
 

@@ -2665,12 +2665,17 @@ void RunCompiledBloom(ShaderManager& manager, bool parallel) {
     }
 }
 
-void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_bloom = false) {
+void RunCompiledTonemapping(
+    ShaderManager& manager,
+    bool           parallel,
+    bool           with_bloom = false,
+    bool           test_lut   = false
+) {
     using namespace Moer::Render::Raster;
     auto& device = RenderDevice::Get();
     constexpr uint32 width = 16;
     constexpr uint32 height = 16;
-    auto             run    = [&](bool record_parallel, bool merged) {
+    auto             run    = [&](bool record_parallel, bool merged, bool has_lut = false, float strength = 1.0f, bool rotate_channels = false) {
         TonemappingPass pass(device, manager, PF_R32G32B32A32_SFLOAT);
         auto            input = device.CreateTexture(
             "tonemap_test_input",
@@ -2686,6 +2691,33 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
         );
         std::array<float4, width * height> pixels{};
         pixels.fill(with_bloom ? float4(32.0f, 24.0f, 12.0f, 1.0f) : float4(0.25f, 0.5f, 0.75f, 1.0f));
+        constexpr uint32 lut_size = 4;
+        TextureRef       lut;
+
+        std::array<uint8, lut_size * lut_size * lut_size * 4> lut_pixels{};
+        if (test_lut) {
+            const std::array samples{
+                float4(0.f, 0.f, 0.f, 1.f), float4(1.f, 1.f, 1.f, 1.f), float4(1.f, 0.f, 0.f, 1.f), float4(0.f, 1.f, 0.f, 1.f), float4(0.f, 0.f, 1.f, 1.f), float4(0.125f, 0.375f, 0.625f, 1.f), float4(0.9f, 0.1f, 0.95f, 1.f), float4(-0.25f, 0.375f, 1.5f, 1.f)
+            };
+            for (size_t i = 0; i < pixels.size(); ++i)
+                pixels[i] = samples[i % samples.size()];
+        }
+        if (has_lut) {
+            lut = device.CreateTexture(
+                "tonemap_test_lut", Extent2D(lut_size * lut_size, lut_size), PF_R8G8B8A8_UNORM, ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
+            );
+            for (uint32 g = 0; g < lut_size; ++g) {
+                for (uint32 b = 0; b < lut_size; ++b) {
+                    for (uint32 r = 0; r < lut_size; ++r) {
+                        const auto index      = ((g * lut_size + b) * lut_size + r) * 4;
+                        lut_pixels[index]     = (rotate_channels ? b : r) * 255 / (lut_size - 1);
+                        lut_pixels[index + 1] = (rotate_channels ? r : g) * 255 / (lut_size - 1);
+                        lut_pixels[index + 2] = (rotate_channels ? g : b) * 255 / (lut_size - 1);
+                        lut_pixels[index + 3] = 255;
+                    }
+                }
+            }
+        }
         TonemappingPass::RecordParameters params{};
         params.input                 = {input, 0, {}};
         params.output                = {output, 0, {}};
@@ -2694,8 +2726,12 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
         params.shader.resolution     = uint2(width, height);
         params.shader.resolution_inv = float2(1.0f / width, 1.0f / height);
         params.shader.exposure_ev    = 1.0f;
+        params.color_lut                 = lut;
+        params.shader.color_lut_size     = has_lut ? lut_size : 0;
+        params.shader.color_lut_strength = strength;
+
         auto& ae                     = params.shader.ae;
-        ae.enabled                   = 1;
+        ae.enabled                   = test_lut ? 0 : 1;
         ae.log2lum_to01_scale        = 1.0f / 16.0f;
         ae.log2lum_to01_bias         = 0.5f;
         ae.log2lum_to01_scale_inv    = 16.0f;
@@ -2717,6 +2753,8 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
             ),
                            .tonemapping_output = graph.ImportTexture("Output", output, {}),
         };
+        if (lut)
+            resources.color_lut = graph.ImportTexture("ColorLUT", lut, {});
         for (auto texture : {resources.input, resources.tonemapping_output}) {
             graph.SetInitialState(
                 texture,
@@ -2724,6 +2762,9 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
                 RenderGraph::QueueRole::None,
                 RenderGraph::AccessMode::None
             );
+        }
+        if (lut) {
+            graph.SetInitialState(resources.color_lut, RenderGraph::TextureBoundary::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
         }
         graph.SetInitialState(resources.exposure, RenderGraph::BufferBoundary::Undefined,
             RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
@@ -2733,10 +2774,14 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
                 builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
                     .Write(resources.input, RenderGraph::TextureAccessType::TransferDestination)
                     .Write(resources.exposure, RenderGraph::BufferAccessType::TransferDestination);
+                if (lut)
+                    builder.Write(resources.color_lut, RenderGraph::TextureAccessType::TransferDestination);
             },
             [=](CommandList& commands) {
                 commands.CopyFrom(OwnedBytes(pixels), input->GetView());
                 commands.CopyFrom(OwnedBytes(std::array<float, 1>{1.0f}), params.exposure->GetView());
+                if (lut)
+                    commands.CopyFrom(OwnedBytes(lut_pixels), lut->GetView());
             },
             RenderGraph::PassRecordPolicy::ParallelAllowed
         );
@@ -2821,6 +2866,9 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
         );
         graph.Export(resources.exposure, RenderGraph::BufferAccessType::TransferSource,
             RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        if (lut) {
+            graph.Export(resources.color_lut, RenderGraph::TextureAccessType::Sampled, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        }
         if (!graph.Compile())
             throw std::runtime_error("tonemapping graph failed: " + graph.GetCompileError());
         bool recorded = false;
@@ -2851,9 +2899,38 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
             result->size() != width * height * 4) {
             throw std::runtime_error("tonemapping histogram/exposure/output readback is invalid");
         }
+        if (test_lut) {
+            for (size_t i = 0; i < pixels.size(); ++i) {
+                const auto&  source = pixels[i];
+                const float3 graded = rotate_channels ? float3(source.z, source.x, source.y) :
+                                                        float3(source.x, source.y, source.z);
+                for (uint32 channel = 0; channel < 4; ++channel) {
+                    const float expected = channel == 3 ? 1.0f :
+                                           has_lut      ? source[channel] * (1.0f - strength) +
+                                                              std::clamp(graded[channel], 0.0f, 1.0f) * strength :
+                                                          source[channel];
+                    if (!std::isfinite((*result)[i * 4 + channel]) ||
+                        std::abs((*result)[i * 4 + channel] - expected) > 0.002f) {
+                        throw std::runtime_error("LUT grading differs from the reference color transform");
+                    }
+                }
+            }
+        }
         result->push_back(exposure->front());
         return *result;
     };
+    if (test_lut) {
+        for (bool rotate : {false, true}) {
+            for (float strength : {0.0f, 0.35f, 1.0f}) {
+                static_cast<void>(run(false, false, true, strength, rotate));
+                static_cast<void>(run(parallel, true, true, strength, rotate));
+            }
+        }
+        static_cast<void>(run(parallel, true));
+        LOG_INFO("[TESTCASE][PASS] name=TonemappingColorLUT identity=verified transform=verified "
+                 "interpolation=verified endpoints=verified strength=verified fallback=verified");
+        return;
+    }
     const auto reference = run(false, false);
     const auto compiled  = run(parallel, true);
     if (reference.size() != compiled.size()) {
@@ -15169,6 +15246,7 @@ int main(int argc, const char** argv) {
             RunTaaNeighborhoodMotionRegression(manager);
             RunSsrTraceExitRegression(manager);
             RunAoCompositeRgbRegression(manager);
+            RunCompiledTonemapping(manager, parallel, false, true);
             ShaderManager::ShutDown();
             shader_manager_initialized = false;
             RenderDevice::Dispose();

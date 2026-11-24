@@ -45,6 +45,8 @@ int main(int argc, const char** argv) {
         raster.ssr_is_ssr_enabled = true;
         raster.shadow_pcss_enabled = true;
         raster.tonemapping_ae.enabled = true;
+        const char* lut_path           = std::getenv("MOER_SHADER_SMOKE_LUT");
+        const char* rejected_lut_path  = std::getenv("MOER_SHADER_SMOKE_LUT_REJECTED");
         // Opt in when TensorRT models and CUDA are available. The same mode
         // transitions then also exercise stable AO imports and missing history.
         if (const char* cuda_smoke = std::getenv("MOER_SHADER_SMOKE_CUDA");
@@ -68,6 +70,20 @@ int main(int argc, const char** argv) {
             }
             const auto& phase = phases[phase_index];
             if (ready_frames % frames_per_phase == 0) {
+                if (lut_path && *lut_path) {
+                    const bool expect_error = phase_index == 5;
+                    if (phase_index > 0 &&
+                        config->raster_status.color_grading_error.empty() == expect_error) {
+                        throw std::runtime_error("Unexpected LUT load status in shader smoke test");
+                    }
+                    raster.color_grading_enabled  = phase_index != 0 && phase_index != 7;
+                    raster.color_grading_strength = phase_index == 2 ? 0.0f : 0.5f;
+                    raster.color_grading_lut_path = phase_index == 4 ?
+                                                        (rejected_lut_path && *rejected_lut_path ? rejected_lut_path :
+                                                                                                   std::string(lut_path) + ".missing") :
+                                                    phase_index == 5 ? "" :
+                                                                       lut_path;
+                }
                 raster.ao_mode = phase.ao;
                 raster.ao_half_resolution = phase.half_resolution;
                 raster.rtao_denoiser_enable = phase.denoise;
@@ -92,6 +108,9 @@ int main(int argc, const char** argv) {
         }
         engine.ShutDown();
         std::cout << "[TESTCASE][PASS] ShaderEffectsSmoke completed all phases\n";
+        if (lut_path && *lut_path) {
+            std::cout << "[TESTCASE][PASS] ColorLUT load/disable/strength/rejected/clear/reload\n";
+        }
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "[TESTCASE][FAIL] " << error.what() << '\n';

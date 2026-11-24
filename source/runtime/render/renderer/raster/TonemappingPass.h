@@ -41,7 +41,10 @@ public:
     DEFINE_SHADER_BUFFER(exposure); // input
     DEFINE_SHADER_BUFFER(histogram);
 
-    DEFINE_SHADER_ARGS(param, input_image, exposure, histogram);
+    DEFINE_SHADER_TEX(color_lut);
+    DEFINE_SHADER_SAMPLER(color_lut_sampler);
+
+    DEFINE_SHADER_ARGS(param, input_image, exposure, histogram, color_lut, color_lut_sampler);
 };
 
 /**
@@ -58,6 +61,7 @@ public:
         RenderGraph::TextureHandle input{};
         RenderGraph::BufferHandle  exposure{};
         RenderGraph::TextureHandle tonemapping_output{};
+        RenderGraph::TextureHandle color_lut{};
     };
 
     struct RecordParameters {
@@ -65,6 +69,7 @@ public:
         TextureWithHandle                input{}, output{};
         BufferRef                        exposure{};
         uint3                            histogram_groups{};
+        TextureRef                       color_lut{};
     };
 
     struct GraphResult {
@@ -90,9 +95,14 @@ public:
     );
 
     [[nodiscard]] const BufferRef& GetExposureBuffer() const { return exposure_buffer; }
+    [[nodiscard]] const std::string& GetColorGradingError() const {
+        return color_grading_error;
+    }
     void ResetExposure(CommandList& commands);
 
 private:
+    void UpdateColorLut(RenderDevice& device, const std::string& path);
+
     static void RecordClear(CommandList& commands, BufferView histogram);
     void RecordHistogram(CommandList& commands, const RecordParameters& parameters, BufferView histogram);
     void RecordExposure(CommandList& commands, const RecordParameters& parameters, BufferView histogram);
@@ -102,6 +112,9 @@ private:
     TonemappingHistogramPipeline tonemapping_histogram_pipeline;
     TonemappingExposurePipeline  tonemapping_exposure_pipeline;
     BufferRef                    exposure_buffer;
+    TextureRef                   color_lut;
+    std::string                  color_lut_path;
+    std::string                  color_grading_error;
 };
 
 } // namespace Moer::Render::Raster

@@ -424,6 +424,9 @@ ImageReadDesc ImageIO::ReadFromMemory(
         reinterpret_cast<int*>(&desc.channel),
         _desired_channal
     );
+    if (!desc.data) {
+        return desc;
+    }
 
     // stbi_load 返回的 desc.channel 是原图通道数
     // _desired_channal 是期望通道数 和 当前data通道数

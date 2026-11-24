@@ -253,6 +253,10 @@ struct RasterConfig {
         bool debug_visualize          = false;
     } tonemapping_ae;
 
+    bool        color_grading_enabled  = false;
+    float       color_grading_strength = 1.0f;
+    std::string color_grading_lut_path;
+
     // MARK: AA
     EAaMode aa_mode = EAaMode::SMAA_1X;
 

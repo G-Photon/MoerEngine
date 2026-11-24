@@ -76,6 +76,7 @@ struct RasterFrameStatus {
     GaussianRasterStatus gaussian_status{};
     CullingStats         culling_stats{};
     CooperativeOpsStatus cooperative_ops_status{};
+    std::string          color_grading_error;
 };
 
 } // namespace Moer
