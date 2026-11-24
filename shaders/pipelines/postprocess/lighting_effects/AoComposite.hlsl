@@ -81,7 +81,8 @@ float4 JointBilateralUpsampleAO(float2 uv, bool include_indirect) {
     }
 
     if (moer_constants.param.ao_mode == Moer::EAoMode::RTAO_AO_ONLY || moer_constants.param.ao_mode == Moer::EAoMode::SSAO_AO_ONLY ||
-        moer_constants.param.ao_mode == Moer::EAoMode::SSDO_AO_ONLY) {
+        moer_constants.param.ao_mode == Moer::EAoMode::SSDO_AO_ONLY ||
+        moer_constants.param.ao_mode == Moer::EAoMode::GTAO_AO_ONLY) {
         rw_output[pixel_pos] = float4(lighting.aaa, 1.0);
     } else {
         float3 color         = TextureHandle(moer_constants.param.color_tex).SampleLevel<float3>(uv);

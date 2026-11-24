@@ -44,6 +44,22 @@ struct AoPipelineBindlessParam {
     uint camera_mv_data_handle; // for camera motion vector
 };
 
+struct GtaoPipelineBindlessParam {
+    float4x4 clip2world;
+    float3   camera_position;
+    float    radius;
+    float2   inv_resolution;
+    float    intensity;
+    uint     slice_count;
+    uint     step_count;
+    uint     normal_tex;
+    uint     depth_tex;
+    uint     camera_mv_data_handle;
+};
+#ifdef __cplusplus
+static_assert(sizeof(GtaoPipelineBindlessParam) <= 128);
+#endif
+
 struct SsdoPipelineBindlessParam {
     float4x4 clip2world;
     float4x4 world2clip;

@@ -23,6 +23,14 @@ public:
     DEFINE_SHADER_ARGS(bdls, param);
 };
 
+class GtaoPipeline : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(GtaoPipeline);
+    DEFINE_SHADER_CONSTANT(GtaoPipelineBindlessParam, param);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_ARGS(bdls, param);
+};
+
 class RtaoPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(RtaoPipeline);
@@ -96,6 +104,7 @@ public:
         CameraMotionVectorData    motion_vector_upload{};
         RaytracingTlasRef         tlas{};
         AoPipelineBindlessParam   ao{};
+        GtaoPipelineBindlessParam gtao{};
         RtaoPipelineBindlessParam rtao{};
         SsdoPipelineBindlessParam ssdo{};
     };
@@ -128,6 +137,11 @@ public:
                           .Vertex("core/utils/FullScreenQuad.hlsl")
                           .Pixel("pipelines/postprocess/lighting_effects/Ao.hlsl")
                           .Build<AoPipeline>(std::move(create_pso_func()));
+
+        gtao_pipeline = context.manager.Raster()
+                            .Vertex("core/utils/FullScreenQuad.hlsl")
+                            .Pixel("pipelines/postprocess/lighting_effects/Gtao.hlsl")
+                            .Build<GtaoPipeline>(create_pso_func());
 
         {
             RtaoSampleModeMacros uniform_macros{};
@@ -254,6 +268,19 @@ public:
             }
         }
         {
+            auto& param                 = parameters.gtao;
+            param.clip2world            = Transpose(camera.GetViewProjectionMatrixInv());
+            param.camera_position       = camera.GetPosition();
+            param.radius                = std::max(0.0f, ui_config.gtao_radius);
+            param.intensity             = std::max(0.0f, ui_config.gtao_intensity);
+            param.inv_resolution        = float2(1.0f) / float2(frame.EvaluationOutput().GetSize());
+            param.slice_count           = uint32(std::clamp(ui_config.gtao_slice_count, 1, 16));
+            param.step_count            = uint32(std::clamp(ui_config.gtao_step_count, 1, 16));
+            param.normal_tex            = context.textures.normal.hdl;
+            param.depth_tex             = context.textures.depth_nearest_sampler.hdl;
+            param.camera_mv_data_handle = camera_mv_data_in_gpu.hdl;
+        }
+        {
             auto& param                   = parameters.ssdo;
             param.clip2world              = Transpose(camera.GetViewProjectionMatrixInv());
             param.inv_resolution          = float2(1.0f) / float2(parameters.frame.EvaluationOutput().GetSize());
@@ -284,6 +311,12 @@ public:
     }
 
     void RecordEvaluate(CommandList& cmd_list, const RecordParameters& parameters) {
+
+        if (parameters.mode == EAoMode::GTAO || parameters.mode == EAoMode::GTAO_AO_ONLY) {
+            cmd_list.Gfx(gtao_pipeline, parameters.bindless, parameters.gtao)
+                .Draw("GTAO Pass", parameters.frame.EvaluationOutput().GetRect2D(), RasterTool::GetFullScreenDrawDatas(), ColorAttachment(parameters.frame.EvaluationOutput().tex), ColorAttachment(parameters.frame.camera_motion.tex));
+            return;
+        }
 
         if (parameters.mode == EAoMode::RTAO || parameters.mode == EAoMode::RTAO_AO_ONLY) {
             auto& active_pipeline =
@@ -396,6 +429,7 @@ public:
 
 private:
     AoPipeline          ao_pipeline;
+    GtaoPipeline        gtao_pipeline;
     RtaoPipeline        rtao_pipeline_uniform;
     RtaoPipeline        rtao_pipeline_cosine;
     SsdoPipeline        ssdo_pipeline;

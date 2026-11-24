@@ -902,6 +902,11 @@ void RasterUI::ShowConfig() {
             ImGui::SliderInt("Samples Per Pixel", &m_config.ssao_spp, 1, 32);
             ImGui::SliderInt("Sample Radius", &m_config.ssao_sample_radius, 1, 32);
 
+        } else if (m_config.ao_mode == EAoMode::GTAO || m_config.ao_mode == EAoMode::GTAO_AO_ONLY) {
+            ImGui::SliderFloat("Radius", &m_config.gtao_radius, 0.0f, 5.0f);
+            ImGui::SliderFloat("Intensity", &m_config.gtao_intensity, 0.0f, 2.0f);
+            ImGui::SliderInt("Slices", &m_config.gtao_slice_count, 1, 16);
+            ImGui::SliderInt("Steps Per Side", &m_config.gtao_step_count, 1, 16);
         } else if (m_config.ao_mode == EAoMode::RTAO || m_config.ao_mode == EAoMode::RTAO_AO_ONLY) {
             ImGui::SliderFloat("Intensity", &m_config.rtao_intensity, 0.0f, 1.0f);
             ImGui::SliderFloat("Ray Trace Radius", &m_config.rtao_ray_trace_distance, 0.0f, 20.0f);

@@ -237,6 +237,15 @@ if(MOER_SHADER_GPU_TESTS)
         WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 180 LABELS "gpu;shader")
 endif()
 
+add_executable(TestGtao "GtaoTest.cpp")
+target_link_libraries(TestGtao PRIVATE Moer::Runtime)
+set_target_properties(TestGtao PROPERTIES FOLDER ${moer_test_folder})
+if(MOER_SHADER_GPU_TESTS)
+    add_test(NAME Gtao COMMAND $<TARGET_FILE:TestGtao>)
+    set_tests_properties(Gtao PROPERTIES
+        WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 90 LABELS "gpu;shader")
+endif()
+
 set(test_target TestShaderStageSupport)
 add_executable(${test_target} "ShaderStageSupportTest.cpp")
 target_link_libraries(${test_target}
