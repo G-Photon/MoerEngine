@@ -4,7 +4,8 @@
 #include "misc/Types.h"
 
 #include "RasterCompileTimeConstants.h"
-#include "shaderheaders/shared/raster/ShaderParameters.h"
+#include "shaderheaders/shared/raster/ProbeLimits.h"
+#include "shaderheaders/shared/raster/SharedEnum.h"
 
 #include <string>
 

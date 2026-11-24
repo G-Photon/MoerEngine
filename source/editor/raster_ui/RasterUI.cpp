@@ -1,5 +1,6 @@
 #include "RasterUI.h"
 #include "misc/Types.h"
+#include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 
 // 提供 Raster 管线的功能控制项和轻量级运行时诊断信息。
 

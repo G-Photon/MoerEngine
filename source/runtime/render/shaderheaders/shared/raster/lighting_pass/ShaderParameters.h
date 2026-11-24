@@ -15,19 +15,17 @@
 //#define CONST constexpr
 #include <cstddef>
 #include "misc/Traits.h"
+#include "shaderheaders/shared/raster/ProbeLimits.h"
 namespace Moer::Render {
 #else
 //#define CONST const
+#include "shared/raster/ProbeLimits.h"
 namespace Moer {
 #endif
 
 // MARK: Main Content Begin
 
 #ifdef __cplusplus
-static constexpr uint RASTER_PROBE_VOLUME_MAX_COUNT = 4;
-static constexpr uint RASTER_PROBE_MAX_COUNT_PER_VOLUME = 512;
-static constexpr uint RASTER_PROBE_MAX_COUNT =
-    RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_COUNT_PER_VOLUME;
 static constexpr uint RASTER_PROBE_BRICK_DIM = 4;
 static constexpr uint RASTER_PROBE_BRICK_PROBE_CAPACITY =
     RASTER_PROBE_BRICK_DIM * RASTER_PROBE_BRICK_DIM * RASTER_PROBE_BRICK_DIM;
@@ -105,10 +103,6 @@ static constexpr uint RASTER_PROBE_GIZMO_COLOR_APV_LEVEL = 4;
 static constexpr uint RASTER_CSM_GIZMO_DRAW_SPLIT_FRUSTUM = 1u << 0u;
 static constexpr uint RASTER_CSM_GIZMO_DRAW_BOUNDING_SPHERE = 1u << 1u;
 #else
-static const uint RASTER_PROBE_VOLUME_MAX_COUNT = 4;
-static const uint RASTER_PROBE_MAX_COUNT_PER_VOLUME = 512;
-static const uint RASTER_PROBE_MAX_COUNT =
-    RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_COUNT_PER_VOLUME;
 static const uint RASTER_PROBE_BRICK_DIM = 4;
 static const uint RASTER_PROBE_BRICK_PROBE_CAPACITY =
     RASTER_PROBE_BRICK_DIM * RASTER_PROBE_BRICK_DIM * RASTER_PROBE_BRICK_DIM;
