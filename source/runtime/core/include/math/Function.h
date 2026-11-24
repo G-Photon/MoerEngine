@@ -610,7 +610,8 @@ inline double SquaredLength(const T& v) noexcept {
 
 template<VectorType T>
 inline Vectord<T::size> Normalize(const T& v) noexcept {
-    return v / Length(v);
+    const Vectord<T::size> precise(v);
+    return precise / Length(precise);
 }
 
 template<NumericType T>
