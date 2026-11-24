@@ -17,7 +17,12 @@ float linearize_depth(float depth) {
 }
 
 float get_depth(float2 uv) {
-    return TextureHandle(moer_constants.param.depth_tex).Sample2D<float>(uv).x;
+    // Interpolating across a silhouette invents intermediate surfaces. Trace the
+    // actual depth texel independently of the configured sampler filter.
+    uint width, height;
+    TextureHandle(moer_constants.param.depth_tex).GetTexture2D<float>().GetDimensions(width, height);
+    uint2 pixel = min(uint2(saturate(uv) * uint2(width, height)), uint2(width, height) - 1);
+    return TextureHandle(moer_constants.param.depth_tex).GetTexture2D<float>().Load(int3(pixel, 0));
 }
 
 bool should_apply_ssr(float2 uv) { // the performance cost is so high
@@ -60,6 +65,10 @@ float4 ssr_sample_color(float2 uv) {
 bool TraceScreenSpaceReflection(float3 test_point, float3 direction, float jitter, out float2 hit_uv) {
     hit_uv = 0.f;
     float3 uvd;
+    if (!TryProjectSsrPointToScreen(test_point, uvd)) {
+        return false;
+    }
+    float previous_delta = linearize_depth(uvd.z) - linearize_depth(get_depth(uvd.xy));
 
     for (uint i = 0; i < moer_constants.param.ssr_sample_count; i++) {
         float3 last_point = test_point;
@@ -72,29 +81,41 @@ bool TraceScreenSpaceReflection(float3 test_point, float3 direction, float jitte
         float sample_depth = linearize_depth(get_depth(uvd.xy));
         float test_depth = linearize_depth(uvd.z);
 
-        bool within_depth_thickness = (test_depth - sample_depth) < 0.001 * (1.0 + test_depth * 200.0 + float(i)); // 去除锯齿/波纹
-
-        if (sample_depth < test_depth && within_depth_thickness) {
-            direction = test_point - last_point;
-            test_point = last_point;
-            float s = 1.0;
-
-            // use binary search instead
-            // TODO: use HiZ to accelerate
-            for (uint j = 0; j < 4; j++) {
-                direction *= 0.5;
-                test_point += direction * s;
-                if (!TryProjectSsrPointToScreen(test_point, uvd)) {
+        float delta = test_depth - sample_depth;
+        if (previous_delta < 0.f && delta >= 0.f) {
+            // Coarse endpoints may overshoot a surface. Refine a known front/back
+            // bracket before applying thickness, rather than accepting any nearby
+            // point behind the depth buffer as a hit.
+            float3 front = last_point;
+            float3 back = test_point;
+            for (uint j = 0; j < 8; ++j) {
+                float3 midpoint = (front + back) * 0.5f;
+                if (!TryProjectSsrPointToScreen(midpoint, uvd)) {
                     return false;
                 }
                 sample_depth = linearize_depth(get_depth(uvd.xy));
                 test_depth = linearize_depth(uvd.z);
-                s = (sample_depth < test_depth) ? -1.0 : 1.0;
+                if (test_depth < sample_depth) {
+                    front = midpoint;
+                } else {
+                    back = midpoint;
+                }
             }
-
-            hit_uv = uvd.xy;
-            return true;
+            if (!TryProjectSsrPointToScreen(back, uvd)) {
+                return false;
+            }
+            float raw_depth = get_depth(uvd.xy);
+            sample_depth = linearize_depth(raw_depth);
+            test_depth = linearize_depth(uvd.z);
+            float residual = test_depth - sample_depth;
+            // A depth discontinuity is not necessarily a surface intersection.
+            float thickness = max(0.01f, sample_depth * 0.01f);
+            if (raw_depth > 0.f && residual >= 0.f && residual <= thickness) {
+                hit_uv = uvd.xy;
+                return true;
+            }
         }
+        previous_delta = delta;
     }
 
     // Exhausting the sample budget does not establish an intersection.

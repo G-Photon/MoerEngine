@@ -2287,6 +2287,8 @@ void RunSsrTraceExitRegression(ShaderManager& manager) {
         float depth;
         float clip_w;
         bool expected_hit;
+        float       depth_step = 0.f;
+        bool        depth_edge = false;
     };
     const TraceCase cases[] = {
         {"zero-budget", 0, float3(0.f, 0.f, 0.5f), 0.1f, 0.52f, 1.f, false},
@@ -2296,12 +2298,21 @@ void RunSsrTraceExitRegression(ShaderManager& manager) {
         {"zero-projection-w", 4, float3(0.f, 0.f, 0.5f), 0.1f, 0.52f, 0.f, false},
         {"behind-camera", 4, float3(0.f, 0.f, 0.5f), 0.1f, 0.52f, -1.f, false},
         {"refinement-outside", 1, float3(-1.3f, 0.f, 0.5f), 0.4f, 0.52f, 1.f, false},
-        {"refined-depth-hit", 1, float3(0.f, 0.f, 0.5f), 0.1f, 0.52f, 1.f, true},
+        {"parallel-behind-surface", 1, float3(0.f, 0.f, 0.5f), 0.1f, 0.52f, 1.f, false},
+        {"parallel-in-front", 8, float3(0.f, 0.f, 0.5f), 0.1f, 0.45f, 1.f, false},
+        {"refined-depth-crossing", 1, float3(0.f, 0.f, 0.5f), 0.1f, 0.45f, 1.f, true, -.1f},
+        {"deep-coarse-endpoint", 1, float3(0.f, 0.f, 0.5f), 0.1f, 0.45f, 1.f, true, -.4f},
+        {"small-depth-crossing", 1, float3(0.f, 0.f, 0.5f), 0.1f, 0.497f, 1.f, true, -.005f},
+        {"leaving-surface", 4, float3(0.f, 0.f, 0.5f), 0.1f, 0.52f, 1.f, false, .1f},
+        {"depth-discontinuity", 1, float3(0.f, 0.f, 0.5f), 0.1f, 0.45f, 1.f, false, 0.f, true},
     };
     for (const auto& test : cases) {
+        const uint32       depth_width = test.depth_edge ? 64u : 1u;
+        std::vector<float> depth_pixels(depth_width, test.depth);
+        if (test.depth_edge)
+            std::fill(depth_pixels.begin() + 34, depth_pixels.end(), .56f);
         auto depth = device.CreateTexture(
-            "ssr_depth", Extent3D(1, 1, 1), PF_R32_SFLOAT,
-            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
+            "ssr_depth", Extent3D(depth_width, 1, 1), PF_R32_SFLOAT, ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
         );
         auto output = device.CreateTexture(
             "ssr_trace_result", Extent3D(2, 2, 1), PF_R32G32B32A32_SFLOAT,
@@ -2316,7 +2327,8 @@ void RunSsrTraceExitRegression(ShaderManager& manager) {
         params.far_clip = 10.f;
         params.ssr_step_base = test.step;
         params.ssr_sample_count = test.samples;
-        params.depth_tex = table->AllocateTexture(depth->GetView(), Sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE));
+        params.ssr_roughness_threshold = test.depth_step; // Controlled trace direction in the regression shader.
+        params.depth_tex               = table->AllocateTexture(depth->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
         CommandList publish;
         publish.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         publish.UpdateBindlessArray(table);
@@ -2334,7 +2346,9 @@ void RunSsrTraceExitRegression(ShaderManager& manager) {
                 builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
                     .Write(depth_handle, RenderGraph::TextureAccessType::TransferDestination);
             },
-            [&](CommandList& commands) { commands.CopyFrom(std::as_bytes(std::span(&test.depth, 1)), depth->GetView()); },
+            [&](CommandList& commands) {
+                commands.CopyFrom(std::as_bytes(std::span(depth_pixels)), depth->GetView());
+            },
             RenderGraph::PassRecordPolicy::ParallelAllowed
         );
         graph.AddRecordPass(
@@ -2372,9 +2386,11 @@ void RunSsrTraceExitRegression(ShaderManager& manager) {
                 throw std::runtime_error(std::string("SSR trace exit mismatch: ") + test.name);
             }
             if (test.expected_hit) {
-                // Four unchanged binary-refinement steps end at x=0.1/16, projected onto [0,1].
-                if (std::abs((*result)[first + 1] - 0.503125f) > 1e-6f || std::abs((*result)[first + 2] - 0.5f) > 1e-6f) {
-                    throw std::runtime_error("SSR refined hit UV changed");
+                const float ray_fraction = (test.depth - test.origin.z) / test.depth_step;
+                const float expected_u   = (test.origin.x + test.step * ray_fraction) * .5f + .5f;
+                if (std::abs((*result)[first + 1] - expected_u) > std::abs(test.step) / 512.f + 1e-6f ||
+                    std::abs((*result)[first + 2] - .5f) > 1e-6f) {
+                    throw std::runtime_error("SSR refined hit UV does not match the plane intersection");
                 }
             } else if ((*result)[first + 1] != 0.f || (*result)[first + 2] != 0.f) {
                 throw std::runtime_error(std::string("SSR miss published a candidate UV: ") + test.name);

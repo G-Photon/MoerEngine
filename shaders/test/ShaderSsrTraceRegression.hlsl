@@ -7,7 +7,7 @@ float4 main(float4 position : SV_POSITION) : SV_TARGET {
     float2 hit_uv;
     bool hit = TraceScreenSpaceReflection(
         moer_constants.param.camera_position,
-        float3(moer_constants.param.ssr_step_base, 0.f, 0.f),
+        float3(moer_constants.param.ssr_step_base, 0.f, moer_constants.param.ssr_roughness_threshold),
         0.f,
         hit_uv
     );
