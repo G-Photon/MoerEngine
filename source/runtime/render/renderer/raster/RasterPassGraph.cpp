@@ -667,13 +667,16 @@ void AoPass::AddToGraph(
     );
 }
 
-void AoPass::AddCompositeToGraph(
+RenderGraph::TextureHandle AoPass::AddCompositeToGraph(
     RenderGraph&            graph,
     const RasterConfig&     ui_config,
     Extent2D                full_resolution,
     Extent2D                ao_resolution,
     CompositeGraphResources resources
 ) {
+#if !WITH_CUDA
+    if (ui_config.ao_mode == EAoMode::NONE) return resources.lighting_output;
+#endif
     const bool ssdo = ui_config.ao_mode == EAoMode::SSDO;
     auto prepared = std::make_shared<CompositeRecordParameters>(PrepareComposite(ui_config, full_resolution, ao_resolution));
     const auto bindings = graph.ImportToken("AoComposite.bindings", prepared.get());
@@ -718,6 +721,7 @@ void AoPass::AddCompositeToGraph(
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
     );
+    return resources.ao_output;
 }
 
 void RtaoDenoiserPass::AddToGraph(

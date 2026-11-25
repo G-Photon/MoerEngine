@@ -46,7 +46,7 @@ std::vector<float> RunCase(AoPass& pass, Extent2D size, EAoMode mode, bool half,
     const Extent2D low(half ? std::max(1u, size.x / 2) : size.x, half ? std::max(1u, size.y / 2) : size.y);
     constexpr auto sampled = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST;
     constexpr auto output_usage = sampled | ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_SRC;
-    const auto color = device.CreateTexture("AO.color", size, PF_R32G32B32A32_SFLOAT, sampled);
+    const auto color = device.CreateTexture("AO.color", size, PF_R32G32B32A32_SFLOAT, sampled | ETextureUsageFlags::TRANSFER_SRC);
     const auto ao = device.CreateTexture("AO.scalar", low, PF_R32G32B32A32_SFLOAT, sampled);
     const auto indirect = device.CreateTexture("AO.indirect", low, PF_R32G32B32A32_SFLOAT, sampled);
     const auto normal = device.CreateTexture("AO.normal", size, PF_R32G32B32A32_SFLOAT, sampled);
@@ -55,6 +55,7 @@ std::vector<float> RunCase(AoPass& pass, Extent2D size, EAoMode mode, bool half,
     InitializeGraphicsTextures(std::array{color, ao, indirect, normal, depth});
     if (persistent_output) InitializeGraphicsTexture(persistent_output);
     const bool only = mode == EAoMode::SSAO_AO_ONLY || mode == EAoMode::RTAO_AO_ONLY || mode == EAoMode::SSDO_AO_ONLY;
+    const bool bypass = mode == EAoMode::NONE && !WITH_CUDA;
     RenderGraphResourcePool pool(100);
     RenderGraphTransientAllocator allocator(pool);
     uint32 first_allocations = 0;
@@ -74,7 +75,7 @@ std::vector<float> RunCase(AoPass& pass, Extent2D size, EAoMode mode, bool half,
             const auto normals = ImportRasterTexture(graph, "Normal", normal.Get());
             const auto depths = ImportRasterTexture(graph, "Depth", depth.Get());
             const RGTransientTextureDesc desc{.extent = Extent3D(size.x, size.y, 1), .format = PF_R32G32B32A32_SFLOAT, .usage = output_usage};
-            const auto output = pooled ? graph.CreateTransientTexture("Composite", desc) : ImportRasterTexture(graph, "Composite", persistent_output.Get());
+            const auto candidate = pooled ? graph.CreateTransientTexture("Composite", desc) : ImportRasterTexture(graph, "Composite", persistent_output.Get());
             const auto late = graph.CreateTransientTexture("AfterComposite", desc);
             const auto order = graph.ImportToken("SnapshotComplete", &pool);
             graph.AddRecordPass("Upload", [=](RenderGraph::PassBuilder& builder) {
@@ -88,8 +89,9 @@ std::vector<float> RunCase(AoPass& pass, Extent2D size, EAoMode mode, bool half,
                 commands.ClearResource(normal->GetView(), float4(.5f, .5f, 1.f, 1.f));
                 commands.ClearResource(depth->GetView(), float4(.5f));
             }, RenderGraph::PassRecordPolicy::ParallelAllowed);
-            pass.AddCompositeToGraph(graph, config, size, low,
-                {.ao_only = ambient, .lighting_output = input, .depth = depths, .normal = normals, .ao_output = output, .indirect = secondary});
+            const auto output = pass.AddCompositeToGraph(graph, config, size, low,
+                {.ao_only = ambient, .lighting_output = input, .depth = depths, .normal = normals, .ao_output = candidate, .indirect = secondary});
+            Require(output == (bypass ? input : candidate), "AO composite did not return the active logical input/output");
             graph.AddRecordPass("Snapshot", [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
                     .Read(output, RenderGraph::TextureAccessType::TransferSource).Write(order).SideEffect();
@@ -114,7 +116,8 @@ std::vector<float> RunCase(AoPass& pass, Extent2D size, EAoMode mode, bool half,
             if (pooled) {
                 const auto& plan = graph.GetCompiledPlan();
                 const auto slot = [&](auto handle) { return plan.resources[handle.handle.resource_id].transient_slot; };
-                Require((slot(output) == slot(late)) != preview, "AO composite preview or expired allocation lifetime is wrong");
+                if (bypass) Require(slot(candidate) == RenderGraph::InvalidIndex, "Disabled AO composite allocated an output");
+                else Require((slot(output) == slot(late)) != preview, "AO composite preview or expired allocation lifetime is wrong");
             }
             CommandList commands;
             commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
@@ -134,7 +137,7 @@ std::vector<float> RunCase(AoPass& pass, Extent2D size, EAoMode mode, bool half,
         if (preview) Require(preview_values && *preview_values == *values, "AO composite preview was corrupted after overwrite");
         for (uint32 y = 0; y < size.y; ++y) for (uint32 x = 0; x < size.x; ++x) {
             const float2 uv((x + .5f) / size.x, (y + .5f) / size.y);
-            const float visibility = Bilinear(occlusion, low, uv).x;
+            const float visibility = bypass ? 1.f : Bilinear(occlusion, low, uv).x;
             const auto light = Bilinear(bounce, low, uv);
             for (uint32 channel = 0; channel < 4; ++channel) {
                 const size_t index = (y * size.x + x) * 4 + channel;

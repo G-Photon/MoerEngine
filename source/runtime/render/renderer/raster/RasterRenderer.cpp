@@ -1400,7 +1400,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                             .history_geometry = graph_resources.ao_geometry_read
                         }
                     );
-                    ao_pass->AddCompositeToGraph(
+                    processing_image_resource = ao_pass->AddCompositeToGraph(
                         graph,
                         raster_config,
                         Extent2D(scene_resolution),
@@ -1414,7 +1414,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                             .indirect = graph_resources.ao_indirect
                         }
                     );
-                    processing_image_resource = graph_resources.ao_output;
                 } else {
                     processing_image_resource = graph_resources.lighting_output;
                 }

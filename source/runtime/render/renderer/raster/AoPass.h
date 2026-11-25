@@ -371,7 +371,7 @@ public:
             .Dispatch(parameters.groups, "AO Composite Pass");
     }
 
-    RENDER_API void AddCompositeToGraph(
+    RENDER_API RenderGraph::TextureHandle AddCompositeToGraph(
         RenderGraph&            graph,
         const RasterConfig&     ui_config,
         Extent2D                full_resolution,
