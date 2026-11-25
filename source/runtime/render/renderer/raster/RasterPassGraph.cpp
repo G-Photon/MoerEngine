@@ -605,16 +605,42 @@ void AoPass::AddToGraph(
     GraphResources resources
 ) {
     MOER_PROFILE_SCOPE("Raster.AddToGraph.AoPass");
-    auto prepared = graph.AddSetupPass(
-        "AmbientOcclusion.Prepare",
-        uint8{0},
-        [this, &context, &ui_config, &camera, frame_index, frame](const uint8&) {
-            return Prepare(context, ui_config, camera, frame_index, frame);
-        }
-    );
-    if (!prepared.IsValid()) {
-        return;
-    }
+    AddToGraph(graph, Prepare(context, ui_config, camera, frame_index, frame), resources);
+}
+
+void AoPass::AddToGraph(RenderGraph& graph, RecordParameters parameters, GraphResources resources) {
+    auto prepared = std::make_shared<RecordParameters>(std::move(parameters));
+    const bool ray_query = prepared->mode == EAoMode::RTAO || prepared->mode == EAoMode::RTAO_AO_ONLY;
+    const bool ssdo = prepared->mode == EAoMode::SSDO || prepared->mode == EAoMode::SSDO_AO_ONLY;
+    const auto bindings = graph.ImportToken("AmbientOcclusion.bindings", prepared.get());
+    graph.AddRecordPass("AmbientOcclusion.PublishBindings",
+        [=](RenderGraph::PassBuilder& builder) { builder.Write(bindings); },
+        [&graph, prepared, resources, ray_query, ssdo](CommandList& commands) {
+            prepared->bindless = RenderDevice::Get().CreateBindlessArray(8);
+            const auto bind = [&](RenderGraph::TextureHandle resource, Sampler sampler = {SF_LINEAR, SAM_REPEAT}) {
+                return prepared->bindless->AllocateTexture(graph.GetPhysicalTexture(resource)->GetView(), sampler);
+            };
+            const auto normal = bind(resources.normal);
+            const auto depth_linear = bind(resources.depth, {SF_LINEAR, SAM_CLAMP_TO_EDGE});
+            const auto depth_nearest = bind(resources.depth, {SF_NEAREST, SAM_CLAMP_TO_EDGE});
+            const auto noise = bind(resources.noise);
+            const auto motion = prepared->bindless->AllocateBuffer(graph.GetPhysicalBuffer(resources.motion_vector_data)->GetView());
+            prepared->ao.normal_tex = prepared->rtao.normal_tex = prepared->ssdo.normal_tex = normal;
+            prepared->ao.depth_tex = depth_linear;
+            prepared->rtao.depth_tex = prepared->ssdo.depth_tex = depth_nearest;
+            prepared->ao.noise_tex = prepared->rtao.noise_tex = prepared->ssdo.noise_tex = noise;
+            prepared->ao.camera_mv_data_handle = prepared->rtao.camera_mv_data_handle = prepared->ssdo.camera_mv_data_handle = motion;
+            auto& frame = prepared->frame;
+            if (frame.denoise) frame.noisy_ao.tex = graph.GetPhysicalTexture(resources.ao_only);
+            else frame.final_ao[frame.write_index].tex = graph.GetPhysicalTexture(resources.ao_only);
+            frame.camera_motion.tex = graph.GetPhysicalTexture(resources.camera_motion_vector);
+            if (ssdo) {
+                prepared->ssdo.input_image = bind(resources.lighting_output);
+                frame.indirect.tex = graph.GetPhysicalTexture(resources.indirect);
+            }
+            if (ray_query) frame.geometry[frame.write_index].tex = graph.GetPhysicalTexture(resources.geometry);
+            commands.UpdateBindlessArray(prepared->bindless);
+        }, RenderGraph::PassRecordPolicy::Serial);
 
     graph.AddRecordPass(
         "AmbientOcclusion.UploadMotion",
@@ -623,23 +649,22 @@ void AoPass::AddToGraph(
                 .Write(resources.motion_vector_data, RenderGraph::BufferAccessType::TransferDestination);
         },
         [this, prepared](CommandList& commands) {
-            RecordUpload(commands, prepared.Get());
+            RecordUpload(commands, *prepared);
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
     );
-    const bool ray_query = ui_config.ao_mode == EAoMode::RTAO || ui_config.ao_mode == EAoMode::RTAO_AO_ONLY;
-    const bool ssdo = ui_config.ao_mode == EAoMode::SSDO || ui_config.ao_mode == EAoMode::SSDO_AO_ONLY;
     graph.AddRecordPass(
         "AmbientOcclusion",
-        [resources, ray_query, ssdo](RenderGraph::PassBuilder& builder) {
+        [resources, ray_query, ssdo, bindings](RenderGraph::PassBuilder& builder) {
             builder
                 .ExecuteOn(
                     RenderGraph::QueueRole::Graphics,
                     ray_query ? RenderGraph::GpuWorkType::Compute : RenderGraph::GpuWorkType::Graphics
                 )
+                .Read(bindings)
                 .Read(resources.normal, RenderGraph::TextureAccessType::Sampled)
                 .Read(resources.depth, RenderGraph::TextureAccessType::Sampled)
-                .Read(resources.lighting_output, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.noise, RenderGraph::TextureAccessType::Sampled)
                 .Write(
                     resources.ao_only,
                     ray_query ? RenderGraph::TextureAccessType::Storage :
@@ -652,7 +677,8 @@ void AoPass::AddToGraph(
                 )
                 .Read(resources.motion_vector_data, RenderGraph::BufferAccessType::ShaderRead);
             if (ssdo) {
-                builder.Write(resources.indirect, RenderGraph::TextureAccessType::ColorAttachment);
+                builder.Read(resources.lighting_output, RenderGraph::TextureAccessType::Sampled)
+                    .Write(resources.indirect, RenderGraph::TextureAccessType::ColorAttachment);
             }
             if (ray_query) {
                 builder.Write(resources.geometry, RenderGraph::TextureAccessType::Storage);
@@ -660,7 +686,7 @@ void AoPass::AddToGraph(
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "AmbientOcclusion", [&] {
-                RecordEvaluate(cmd_list, prepared.Get());
+                RecordEvaluate(cmd_list, *prepared);
             });
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
@@ -726,7 +752,6 @@ RenderGraph::TextureHandle AoPass::AddCompositeToGraph(
 
 void RtaoDenoiserPass::AddToGraph(
     RenderGraph&        graph,
-    RasterContext&      context,
     const RasterConfig& ui_config,
     const Camera&       camera,
     AoFrameResources    frame,
@@ -736,21 +761,35 @@ void RtaoDenoiserPass::AddToGraph(
     if (!frame.denoise) {
         return;
     }
-    auto prepared = graph.AddSetupPass(
-        "RtaoDenoise.Prepare",
-        uint8{0},
-        [this, &context, &ui_config, &camera, frame](const uint8&) {
-            return Prepare(context, ui_config, camera, frame);
-        }
-    );
-    if (!prepared.IsValid()) {
-        return;
-    }
+    AddToGraph(graph, Prepare(ui_config, camera, frame), resources, frame.half_resolution);
+}
+
+void RtaoDenoiserPass::AddToGraph(
+    RenderGraph& graph, RecordParameters parameters, GraphResources resources, bool half_resolution
+) {
+    auto prepared = std::make_shared<RecordParameters>(std::move(parameters));
+    const auto bindings = graph.ImportToken("RtaoDenoise.bindings", prepared.get());
+    graph.AddRecordPass("RtaoDenoise.PublishBindings",
+        [=](RenderGraph::PassBuilder& builder) { builder.Write(bindings); },
+        [&graph, prepared, resources, half_resolution](CommandList& commands) {
+            prepared->bindless = RenderDevice::Get().CreateBindlessArray(8);
+            const auto bind = [&](RenderGraph::TextureHandle resource) {
+                return prepared->bindless->AllocateTexture(graph.GetPhysicalTexture(resource)->GetView(),
+                    {SF_LINEAR, half_resolution ? SAM_CLAMP_TO_EDGE : SAM_REPEAT});
+            };
+            prepared->output.tex = graph.GetPhysicalTexture(resources.history_write);
+            prepared->denoise.curr_ao_tex = bind(resources.ao_only);
+            prepared->denoise.motion_vector_tex = bind(resources.camera_motion_vector);
+            prepared->denoise.history_ao_tex = bind(resources.history_read);
+            prepared->denoise.current_geometry_tex = bind(resources.current_geometry);
+            prepared->denoise.history_geometry_tex = bind(resources.history_geometry);
+            commands.UpdateBindlessArray(prepared->bindless);
+        }, RenderGraph::PassRecordPolicy::Serial);
 
     graph.AddRecordPass(
         "RtaoDenoise",
-        [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.current_geometry, RenderGraph::TextureAccessType::Sampled)
+        [resources, bindings](RenderGraph::PassBuilder& builder) {
+            builder.Read(bindings).Read(resources.current_geometry, RenderGraph::TextureAccessType::Sampled)
                 .Read(resources.history_geometry, RenderGraph::TextureAccessType::Sampled)
                 .Read(resources.camera_motion_vector, RenderGraph::TextureAccessType::Sampled)
                 .Read(resources.history_read, RenderGraph::TextureAccessType::Sampled)
@@ -759,7 +798,7 @@ void RtaoDenoiserPass::AddToGraph(
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "RtaoDenoise", [&] {
-                RecordDenoise(cmd_list, prepared.Get());
+                RecordDenoise(cmd_list, *prepared);
             });
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed

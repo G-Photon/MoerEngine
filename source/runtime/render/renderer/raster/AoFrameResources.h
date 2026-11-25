@@ -8,6 +8,7 @@ namespace Moer::Render::Raster {
 
 // Selected once for a frame. The final pair has stable physical identities for
 // temporal sampling and CUDA imports; write_index advances only on acceptance.
+// Non-CUDA scratch wrappers are populated from graph handles during recording.
 struct AoFrameResources {
     std::array<TextureWithHandle, 2> final_ao;
     std::array<TextureWithHandle, 2> geometry;

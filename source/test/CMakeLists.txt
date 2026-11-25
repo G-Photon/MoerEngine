@@ -232,7 +232,7 @@ set_target_properties(TestShaderEffectsSmoke PROPERTIES FOLDER ${moer_test_folde
 # Opt in: requires a Vulkan ray-tracing GPU and the configured scene assets.
 option(MOER_SHADER_GPU_TESTS "Register shader effect rendering smoke tests" OFF)
 if (NOT APPLE)
-    add_executable(TestAaTransient "AaTransientTest.cpp" "DisplayTransientTest.cpp" "EffectsTransientTest.cpp" "AoCompositeTransientTest.cpp"
+    add_executable(TestAaTransient "AaTransientTest.cpp" "DisplayTransientTest.cpp" "EffectsTransientTest.cpp" "AoCompositeTransientTest.cpp" "AoScratchTransientTest.cpp"
         "${moer_source_dir}/runtime/render/scene/camera/Camera.cpp")
     target_link_libraries(TestAaTransient PRIVATE Moer::Runtime)
     set_target_properties(TestAaTransient PROPERTIES FOLDER ${moer_test_folder})
@@ -253,6 +253,13 @@ if (NOT APPLE)
         set_tests_properties(EffectsTransientContract PROPERTIES
             WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 180 LABELS "gpu;shader" RESOURCE_LOCK shader_gpu)
         add_test(NAME AoCompositeTransientContract COMMAND $<TARGET_FILE:TestAaTransient> --ao-composite)
+        add_test(NAME AoScratchTransientContract COMMAND $<TARGET_FILE:TestAaTransient> --ao-scratch)
+        set_tests_properties(AoScratchTransientContract PROPERTIES
+            WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 150 LABELS "gpu;shader" RESOURCE_LOCK shader_gpu)
+        add_test(NAME AoScratchTransientScene COMMAND $<TARGET_FILE:TestAaTransient> --ao-scratch-scene --set=Render.Raster.RDG.ParallelRecording=false)
+        add_test(NAME AoScratchTransientSceneParallel COMMAND $<TARGET_FILE:TestAaTransient> --ao-scratch-scene --set=Render.Raster.RDG.ParallelRecording=true)
+        set_tests_properties(AoScratchTransientScene AoScratchTransientSceneParallel PROPERTIES
+            WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 150 LABELS "gpu;shader;scene" RESOURCE_LOCK shader_gpu)
         set_tests_properties(AoCompositeTransientContract PROPERTIES
             WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 150 LABELS "gpu;shader" RESOURCE_LOCK shader_gpu)
         add_test(NAME AoCompositeTransientScene COMMAND $<TARGET_FILE:TestAaTransient> --ao-composite-scene --set=Render.Raster.RDG.ParallelRecording=false)

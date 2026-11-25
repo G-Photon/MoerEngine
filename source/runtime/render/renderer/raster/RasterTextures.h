@@ -92,7 +92,7 @@ namespace Moer::Render::Raster {
 // Used for AO half-resolution mode
 #define RASTER_TEXTURES_TABLE_DOWNSAMPLED                                                          \
     X(TexHandle, ao_indirect, Tex2DTag,                                                            \
-      TexConfig::Default(AoIndirectFormat).Usage(E_SAMPLED_COLOR))                                \
+      TexConfig::Default(AoIndirectFormat).Usage(E_SAMPLED_COLOR).GraphTransient(!WITH_CUDA))     \
     X(TexHandle, ao_history_geometry, Tex2DTag,                                                    \
       TexConfig::Default(PF_R32G32B32A32_UINT)                                                     \
           .Usage(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS))               \
@@ -111,12 +111,12 @@ namespace Moer::Render::Raster {
           .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS))                          \
     X(TexHandle, ao_noisy, Tex2DTag,                                                           \
       TexConfig::Default(AoFormat)                                                           \
-          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS))                     \
+          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS).GraphTransient(!WITH_CUDA)) \
     X(TexHandle,                                                                                   \
       camera_motion_vector,                                                                        \
       Tex2DTag,                                                                                    \
       TexConfig::Default(CameraMotionFormat)                                                      \
-          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS))
+          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS).GraphTransient(!WITH_CUDA))
 
 struct RasterTextures {
     static constexpr EPixelFormat TonemappingOutputFormat = PF_R8G8B8A8_UNORM;
@@ -180,7 +180,8 @@ struct RasterTextures {
 #define X(TYPE, NAME, TEXTYPE, CONFIG)                                                                    \
     {                                                                                                     \
         TexConfig cfg = (CONFIG);                                                                         \
-        AssetTool::CreateRasterResource<TEXTYPE>(this->NAME##_half, device, #NAME "_half", half_size, cfg); \
+        if (!cfg.graph_transient)                                                                         \
+            AssetTool::CreateRasterResource<TEXTYPE>(this->NAME##_half, device, #NAME "_half", half_size, cfg); \
     }
             RASTER_TEXTURES_TABLE_DOWNSAMPLED
 #undef X
@@ -206,7 +207,8 @@ struct RasterTextures {
         RASTER_TEXTURES_TABLE_DOWNSAMPLED
 #undef X
         if (create_scene_resources) {
-#define X(TYPE, NAME, TEXTYPE, CONFIG) initialized.emplace_back(NAME##_half.tex->GetView().GetTexture());
+#define X(TYPE, NAME, TEXTYPE, CONFIG) \
+    if (!(CONFIG).graph_transient) initialized.emplace_back(NAME##_half.tex->GetView().GetTexture());
             RASTER_TEXTURES_TABLE_DOWNSAMPLED
 #undef X
             initialized.emplace_back(hiz_current.tex);
@@ -258,9 +260,10 @@ struct RasterTextures {
         if (allocate_scene_resources) {
 #define X(TYPE, NAME, TEXTYPE, CONFIG)                                                         \
     {                                                                                          \
-        TexConfig half_cfg;                                                                    \
+        TexConfig half_cfg = (CONFIG);                                                         \
         half_cfg.sampler = {ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_CLAMP_TO_EDGE};\
-        AssetTool::AllocateRasterResourceHandle(bindless_array, NAME##_half, half_cfg);        \
+        if (!half_cfg.graph_transient)                                                         \
+            AssetTool::AllocateRasterResourceHandle(bindless_array, NAME##_half, half_cfg);    \
     }
         RASTER_TEXTURES_TABLE_DOWNSAMPLED
 #undef X
@@ -297,7 +300,7 @@ struct RasterTextures {
         // Half-resolution variants
         if (free_scene_resources) {
 #define X(TYPE, NAME, TEXTYPE, CONFIG) \
-    AssetTool::FreeRasterResourceHandle(bindless_array, NAME##_half);
+    if (!(CONFIG).graph_transient) AssetTool::FreeRasterResourceHandle(bindless_array, NAME##_half);
         RASTER_TEXTURES_TABLE_DOWNSAMPLED
 #undef X
         }

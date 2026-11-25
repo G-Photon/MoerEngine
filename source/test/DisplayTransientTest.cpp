@@ -334,7 +334,7 @@ void RunDisplayTransientContracts() {
     std::cout << "[TESTCASE][PASS] DisplayTransient: 24 PNG pixel comparisons, 4 rejected overflow frames, 4 rejected mismatches, 56 busy rejections, 36 debug cases" << std::endl;
 }
 
-int RunDisplayTransientScene(int argc, const char** argv, bool effects, bool ao_composite) {
+int RunDisplayTransientScene(int argc, const char** argv, bool effects, bool ao_composite, bool ao_scratch) {
     TestDirectory directory;
     Engine engine;
     try {
@@ -346,7 +346,7 @@ int RunDisplayTransientScene(int argc, const char** argv, bool effects, bool ao_
         config->validation_selected_frame_buffer_name = "tonemapping_output";
         constexpr std::array modes{EGaussianDebugView::Color, EGaussianDebugView::Transmittance,
             EGaussianDebugView::TileCoverage, EGaussianDebugView::ShadowVisibility, EGaussianDebugView::ShadowDepth};
-        const uint32 phase_count = ao_composite ? 16 : effects ? 12 : uint32(modes.size());
+        const uint32 phase_count = ao_scratch ? 24 : ao_composite ? 16 : effects ? 12 : uint32(modes.size());
         const auto recording = CVar::Find("Render.Raster.RDG.ParallelRecording");
         Require(recording.has_value(), "Scene recording policy was not registered");
         uint32 phase = 0, phase_frames = 0, ready_frames = 0, exported_images = 0;
@@ -377,7 +377,21 @@ int RunDisplayTransientScene(int argc, const char** argv, bool effects, bool ao_
                     config->active_viewport_mode = phase % 2 ? EEditorViewportMode::Game : EEditorViewportMode::Scene;
                     auto settings = scene.GetGaussianViewSettings();
                     settings.display_mode = EGaussianDisplayMode::Engine;
-                    settings.debug_view = effects || ao_composite ? EGaussianDebugView::Color : modes[phase];
+                    settings.debug_view = effects || ao_composite || ao_scratch ? EGaussianDebugView::Color : modes[phase];
+                    if (ao_scratch) {
+                        auto& raster = config->raster_config;
+                        const uint32 mode = phase / 6;
+                        constexpr std::array previews{"ao_noisy", "camera_motion_vector", "ao_indirect"};
+                        raster.ao_mode = mode == 0 ? EAoMode::NONE : mode == 1 ? EAoMode::SSDO : EAoMode::RTAO;
+                        raster.ao_half_resolution = phase % 2 != 0;
+                        raster.rtao_denoiser_enable = mode == 3;
+                        raster.rtao_sample_mode = mode == 3 ? ERtaoSampleMode::COSINE_WEIGHTED : ERtaoSampleMode::UNIFORM;
+                        raster.ssr_is_ssr_enabled = false;
+                        config->validation_selected_frame_buffer_name = previews[(phase / 2) % previews.size()];
+                        std::cout << "[AO scratch scene] phase=" << phase << " mode=" << uint32(raster.ao_mode)
+                                  << " half=" << raster.ao_half_resolution << " denoise=" << raster.rtao_denoiser_enable
+                                  << " parallel=" << recording->value << " preview=" << config->validation_selected_frame_buffer_name << std::endl;
+                    }
                     if (ao_composite) {
                         auto& raster = config->raster_config;
                         raster.ao_mode = EAoMode(phase / 2);
@@ -419,7 +433,7 @@ int RunDisplayTransientScene(int argc, const char** argv, bool effects, bool ao_
                     std::cout << "[Display scene] visible=" << counts.visible_count
                               << " tile_pairs=" << counts.tile_pair_count << std::endl;
                     const auto pixels = ReadPng(path, scene_size);
-                    if (!effects && !ao_composite && modes[phase] == EGaussianDebugView::Transmittance) {
+                    if (!effects && !ao_composite && !ao_scratch && modes[phase] == EGaussianDebugView::Transmittance) {
                         const auto [minimum, maximum] = std::minmax_element(pixels.begin(), pixels.end());
                         Require(*minimum < 230 && *maximum > 250,
                                 "Gaussian transmittance PNG contains no visible splat against its background");
@@ -446,7 +460,9 @@ int RunDisplayTransientScene(int argc, const char** argv, bool effects, bool ao_
         Require(imported && phase == phase_count && exported_images == phase_count,
                 "Display scene did not finish every debug/export phase");
         engine.ShutDown();
-        if (ao_composite) {
+        if (ao_scratch) {
+            std::cout << "[TESTCASE][PASS] AoScratchTransient scene: 24 scratch/half-resolution/denoiser/preview phases with visible Gaussian PNG exports" << std::endl;
+        } else if (ao_composite) {
             std::cout << "[TESTCASE][PASS] AoCompositeTransient scene: 16 AO/half-resolution/preview phases with visible Gaussian PNG exports" << std::endl;
         } else if (effects) {
             std::cout << "[TESTCASE][PASS] EffectsTransient scene: 12 denoiser/SSR/preview phases with visible Gaussian PNG exports" << std::endl;

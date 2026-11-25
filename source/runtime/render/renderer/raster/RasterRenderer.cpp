@@ -1000,6 +1000,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             RenderGraph::TextureHandle normal;
             RenderGraph::TextureHandle metal_rough_ao;
             RenderGraph::TextureHandle depth;
+            RenderGraph::TextureHandle noise;
             RenderGraph::TextureHandle cubemap;
             RenderGraph::TextureHandle hiz_current;
             RenderGraph::TextureHandle hiz_previous;
@@ -1137,6 +1138,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     import_texture("metal_rough_ao", raster_context.textures.metal_rough_ao.tex);
                 graph_resources.depth =
                     import_texture("depth", raster_context.textures.depth_linear_sampler.tex);
+                graph_resources.noise = import_texture("noise", raster_context.textures.noise_tex.tex);
                 graph_resources.cubemap = import_texture("cubemap", raster_context.textures.cubemap_tex.tex);
                 const auto depth_nearest_alias = import_texture(
                     "depth_nearest_sampler", raster_context.textures.depth_nearest_sampler.tex
@@ -1152,11 +1154,26 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     import_texture("lighting_output", raster_context.textures.lighting_output.tex);
                 if (raster_ao_frame) {
                     const auto& frame = *raster_ao_frame;
-                    graph_resources.ao_only = import_texture("ao_evaluation", frame.EvaluationOutput().tex);
                     graph_resources.ao_final = import_texture("ao_final", frame.Output().tex);
                     graph_resources.ao_history_read = import_texture("ao_history", frame.PreviousOutput().tex);
+#if WITH_CUDA
+                    graph_resources.ao_only = import_texture("ao_evaluation", frame.EvaluationOutput().tex);
                     graph_resources.camera_motion_vector = import_texture("camera_motion", frame.camera_motion.tex);
                     graph_resources.ao_indirect = import_texture("ao_indirect", frame.indirect.tex);
+#else
+                    const auto size = frame.Output().GetSize();
+                    const auto scratch = [&](std::string_view name, EPixelFormat format) {
+                        return graph.CreateTransientTexture(name, RGTransientTextureDesc{
+                            .extent = Extent3D(size.x, size.y, 1), .format = format,
+                            .usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT |
+                                     ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_SRC |
+                                     ETextureUsageFlags::TRANSFER_DST
+                        });
+                    };
+                    graph_resources.ao_only = frame.denoise ? scratch("ao_noisy", RasterTextures::AoFormat) : graph_resources.ao_final;
+                    graph_resources.camera_motion_vector = scratch("camera_motion", RasterTextures::CameraMotionFormat);
+                    graph_resources.ao_indirect = scratch("ao_indirect", RasterTextures::AoIndirectFormat);
+#endif
                     graph_resources.ao_geometry_read = import_texture("ao_geometry_history", frame.PreviousGeometry().tex);
                     graph_resources.ao_geometry_write = import_texture("ao_geometry", frame.CurrentGeometry().tex);
                 }
@@ -1377,6 +1394,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         {
                             .normal = graph_resources.normal,
                             .depth = graph_resources.depth,
+                            .noise = graph_resources.noise,
                             .lighting_output = graph_resources.lighting_output,
                             .ao_only = graph_resources.ao_only,
                             .camera_motion_vector = graph_resources.camera_motion_vector,
@@ -1387,7 +1405,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     );
                     rtao_denoiser_pass->AddToGraph(
                         graph,
-                        raster_context,
                         raster_config,
                         camera,
                         ao_frame,
@@ -1419,6 +1436,19 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 }
                 if (selected_framebuffer_name == "ao_output") {
                     graph_resources.selected_framebuffer = processing_image_resource;
+                }
+                if (selected_framebuffer_name == "ao_noisy") {
+                    graph_resources.selected_framebuffer = has_meshes ?
+                        graph_resources.ao_only : graph_resources.lighting_output;
+                } else if (selected_framebuffer_name == "camera_motion_vector") {
+                    graph_resources.selected_framebuffer = has_meshes ?
+                        graph_resources.camera_motion_vector : graph_resources.lighting_output;
+                } else if (selected_framebuffer_name == "ao_indirect") {
+                    const bool ssdo = raster_config.ao_mode == EAoMode::SSDO || raster_config.ao_mode == EAoMode::SSDO_AO_ONLY;
+                    graph_resources.selected_framebuffer = has_meshes && ssdo ?
+                        graph_resources.ao_indirect : graph_resources.lighting_output;
+                } else if (has_meshes && selected_framebuffer_name == "ao_output_ambient_only") {
+                    graph_resources.selected_framebuffer = graph_resources.ao_final;
                 }
             }
 

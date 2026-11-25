@@ -71,6 +71,7 @@ public:
     struct GraphResources {
         RenderGraph::TextureHandle normal{};
         RenderGraph::TextureHandle depth{};
+        RenderGraph::TextureHandle noise{};
         RenderGraph::TextureHandle lighting_output{};
         RenderGraph::TextureHandle ao_only{};
         RenderGraph::TextureHandle camera_motion_vector{};
@@ -165,8 +166,6 @@ public:
             sizeof(CameraMotionVectorData),
             EBufferUsageFlags::UNORDERED_ACCESS
         );
-
-        camera_mv_data_in_gpu.hdl = context.bdls->AllocateBuffer(camera_mv_data_in_gpu.buf->GetView());
     }
 
     [[nodiscard]] const BufferRef& GetMotionVectorDataBuffer() const {
@@ -214,7 +213,6 @@ public:
         RecordParameters parameters{};
         parameters.mode                                 = ui_config.ao_mode;
         parameters.rtao_sample_mode                     = ui_config.rtao_sample_mode;
-        parameters.bindless                             = context.bdls;
         parameters.motion_vector_data                   = camera_mv_data_in_gpu;
         parameters.motion_vector_upload.world2clip_prev = Transpose(
             accepted_frame ? accepted_frame->view_projection : camera.GetViewProjectionMatrix()
@@ -226,30 +224,22 @@ public:
         {
             auto& param                 = parameters.ao;
             param.clip2world            = Transpose(camera.GetViewProjectionMatrixInv());
-            param.inv_resolution        = float2(1.0f) / float2(parameters.frame.EvaluationOutput().GetSize());
+            param.inv_resolution        = float2(1.0f) / float2(frame.Output().GetSize());
             param.ssao_intensity        = ui_config.ssao_intensity;
             param.ssao_max_distance     = ui_config.ssao_max_distance;
             param.ssao_sample_count     = ui_config.ssao_spp;
             param.ssao_radius           = ui_config.ssao_sample_radius;
             param.ao_mode               = static_cast<uint32>(ui_config.ao_mode);
-            param.normal_tex            = context.textures.normal.hdl;
-            param.depth_tex             = context.textures.depth_linear_sampler.hdl;
-            param.noise_tex             = context.textures.noise_tex.hdl;
-            param.camera_mv_data_handle = camera_mv_data_in_gpu.hdl;
         }
         {
             auto& param                 = parameters.rtao;
             param.clip2world            = Transpose(camera.GetViewProjectionMatrixInv());
             param.frame_idx             = frame_idx;
-            param.normal_tex            = context.textures.normal.hdl;
-            param.depth_tex             = context.textures.depth_nearest_sampler.hdl;
             param.spp                   = ui_config.rtao_spp;
-            param.resolution            = float2(parameters.frame.EvaluationOutput().GetSize());
+            param.resolution            = float2(frame.Output().GetSize());
             param.inv_resolution        = float2(1.0) / param.resolution;
             param.ray_trace_distance    = ui_config.rtao_ray_trace_distance;
             param.intensity             = ui_config.rtao_intensity;
-            param.camera_mv_data_handle = camera_mv_data_in_gpu.hdl;
-            param.noise_tex             = context.textures.noise_tex.hdl;
             param.depth_tex_resolution =
                 float2(context.textures.depth_nearest_sampler.GetSize());
             if (context.rt_scene()) {
@@ -259,21 +249,16 @@ public:
         {
             auto& param                   = parameters.ssdo;
             param.clip2world              = Transpose(camera.GetViewProjectionMatrixInv());
-            param.inv_resolution          = float2(1.0f) / float2(parameters.frame.EvaluationOutput().GetSize());
+            param.inv_resolution          = float2(1.0f) / float2(frame.Output().GetSize());
             param.ssdo_sample_count       = ui_config.ssao_spp;
             param.ssdo_radius             = ui_config.ssdo_sample_radius;
             param.ssdo_max_distance       = ui_config.ssdo_max_distance;
             param.ssdo_intensity          = ui_config.ssao_intensity;
             param.ssdo_indirect_intensity = ui_config.ssdo_indirect_intensity;
-            param.normal_tex              = context.textures.normal.hdl;
-            param.depth_tex               = context.textures.depth_nearest_sampler.hdl;
-            param.noise_tex               = context.textures.noise_tex.hdl;
             param.ao_mode                 = static_cast<uint32>(ui_config.ao_mode);
             param.ssdo_depth_bias         = ui_config.ssdo_depth_bias;
-            param.input_image             = context.textures.lighting_output.hdl;
             param.world2clip              = Transpose(camera.GetViewProjectionMatrix());
             param.camera_position         = camera.GetPosition();
-            param.camera_mv_data_handle   = camera_mv_data_in_gpu.hdl;
         }
         return parameters;
     }
@@ -342,6 +327,8 @@ public:
         AoFrameResources    frame,
         GraphResources      resources
     );
+
+    RENDER_API void AddToGraph(RenderGraph& graph, RecordParameters parameters, GraphResources resources);
 
     [[nodiscard]] CompositeRecordParameters PrepareComposite(
         const RasterConfig& ui_config,

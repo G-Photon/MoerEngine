@@ -42,31 +42,25 @@ public:
         RtaoDenoiserPassBindlessParam denoise{};
     };
 
-    RtaoDenoiserPass(RasterContext& context) {
+    RtaoDenoiserPass(RasterContext& context) : RtaoDenoiserPass(context.manager) {}
+
+    explicit RtaoDenoiserPass(ShaderManager& manager) {
         GfxPsoCreateInfo info(
-            RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(context.textures.ao_output_ambient_only.tex->GetFormat())}
+            RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(RasterTextures::AoFormat)}
         );
-        rtao_denoiser_pso = context.manager.Raster()
+        rtao_denoiser_pso = manager.Raster()
                                 .Vertex("core/utils/FullScreenQuad.hlsl")
                                 .Pixel("pipelines/postprocess/denoise/RtaoDenoiser.hlsl")
                                 .Build<RtaoDenoiserPassPipeline>(std::move(info));
     }
 
     [[nodiscard]] RecordParameters Prepare(
-        const RasterContext&    context,
         const RasterConfig&     config,
         const Camera&           camera,
         const AoFrameResources& frame
     ) const {
         RecordParameters parameters{};
-        parameters.bindless              = context.bdls;
-        parameters.output                = frame.Output();
         auto& param                      = parameters.denoise;
-        param.history_ao_tex             = frame.PreviousOutput().hdl;
-        param.curr_ao_tex                = frame.EvaluationOutput().hdl;
-        param.motion_vector_tex          = frame.camera_motion.hdl;
-        param.current_geometry_tex       = frame.CurrentGeometry().hdl;
-        param.history_geometry_tex       = frame.PreviousGeometry().hdl;
         param.camera_position            = camera.GetPosition();
         param.inv_resolution             = float2(1.0f) / float2(frame.Output().GetSize());
         param.history_ratio              = frame.has_denoised_history ? config.rtao_denoiser_history_ratio : 0.f;
@@ -91,11 +85,14 @@ public:
 
     void AddToGraph(
         RenderGraph&        graph,
-        RasterContext&      context,
         const RasterConfig& ui_config,
         const Camera&       camera,
         AoFrameResources    frame,
         GraphResources      resources
+    );
+
+    RENDER_API void AddToGraph(
+        RenderGraph& graph, RecordParameters parameters, GraphResources resources, bool half_resolution
     );
 
 private:
