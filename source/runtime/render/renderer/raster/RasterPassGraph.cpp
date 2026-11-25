@@ -669,39 +669,51 @@ void AoPass::AddToGraph(
 
 void AoPass::AddCompositeToGraph(
     RenderGraph&            graph,
-    RasterContext&          context,
     const RasterConfig&     ui_config,
-    AoFrameResources        frame,
+    Extent2D                full_resolution,
+    Extent2D                ao_resolution,
     CompositeGraphResources resources
 ) {
     const bool ssdo = ui_config.ao_mode == EAoMode::SSDO;
-    auto prepared = graph.AddSetupPass(
-        "AoComposite.Prepare",
-        uint8{0},
-        [this, &context, &ui_config, frame](const uint8&) {
-            return PrepareComposite(context, ui_config, frame);
-        }
-    );
-    if (!prepared.IsValid()) {
-        return;
-    }
+    auto prepared = std::make_shared<CompositeRecordParameters>(PrepareComposite(ui_config, full_resolution, ao_resolution));
+    const auto bindings = graph.ImportToken("AoComposite.bindings", prepared.get());
+    graph.AddRecordPass("AoComposite.PublishBindings",
+        [=](RenderGraph::PassBuilder& builder) { builder.Write(bindings); },
+        [&, prepared, resources, ssdo](CommandList& commands) {
+            prepared->bindless = RenderDevice::Get().CreateBindlessArray(8);
+            const auto bind = [&](RenderGraph::TextureHandle resource, Sampler sampler = {SF_LINEAR, SAM_CLAMP_TO_EDGE}) {
+                return prepared->bindless->AllocateTexture(graph.GetPhysicalTexture(resource)->GetView(), sampler);
+            };
+            prepared->output.tex = graph.GetPhysicalTexture(resources.ao_output);
+            const Sampler ao_sampler(SF_LINEAR, prepared->shader.is_half_resolution ? SAM_CLAMP_TO_EDGE : SAM_REPEAT);
+            prepared->shader.ao_tex = bind(resources.ao_only, ao_sampler);
+            prepared->shader.color_tex = bind(resources.lighting_output, {SF_LINEAR, SAM_REPEAT});
+            if (prepared->shader.is_half_resolution) {
+                prepared->shader.depth_tex = bind(resources.depth, {SF_NEAREST, SAM_CLAMP_TO_EDGE});
+                prepared->shader.normal_tex = bind(resources.normal, {SF_LINEAR, SAM_REPEAT});
+            }
+            if (ssdo) prepared->shader.indirect_tex = bind(resources.indirect, ao_sampler);
+            commands.UpdateBindlessArray(prepared->bindless);
+        }, RenderGraph::PassRecordPolicy::Serial);
 
     graph.AddRecordPass(
         "AoComposite",
-        [resources, ssdo](RenderGraph::PassBuilder& builder) {
+        [resources, ssdo, bindings, half = ui_config.ao_half_resolution](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
-                .Read(resources.ao_only, RenderGraph::TextureAccessType::Sampled)
+                .Read(bindings).Read(resources.ao_only, RenderGraph::TextureAccessType::Sampled)
                 .Read(resources.lighting_output, RenderGraph::TextureAccessType::Sampled)
-                .Read(resources.depth, RenderGraph::TextureAccessType::Sampled)
-                .Read(resources.normal, RenderGraph::TextureAccessType::Sampled)
                 .Write(resources.ao_output, RenderGraph::TextureAccessType::Storage);
+            if (half) {
+                builder.Read(resources.depth, RenderGraph::TextureAccessType::Sampled)
+                    .Read(resources.normal, RenderGraph::TextureAccessType::Sampled);
+            }
             if (ssdo) {
                 builder.Read(resources.indirect, RenderGraph::TextureAccessType::Sampled);
             }
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "AoComposite", [&] {
-                RecordComposite(cmd_list, prepared.Get());
+                RecordComposite(cmd_list, *prepared);
             });
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed

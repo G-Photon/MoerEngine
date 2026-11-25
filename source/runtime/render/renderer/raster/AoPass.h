@@ -12,6 +12,7 @@
 #include "RasterTool.h"
 #include "rendergraph/RenderGraph.h"
 #include <optional>
+#include <stdexcept>
 
 namespace Moer::Render::Raster {
 
@@ -107,14 +108,18 @@ public:
         uint3             groups{};
     };
 
-    AoPass(RasterContext& context) {
+    AoPass(RasterContext& context) : AoPass(context.manager) {
+        CreateMotionVectorData(context);
+    }
+
+    explicit AoPass(ShaderManager& manager) {
         auto create_pso_func = [&](bool include_indirect = false) {
             Array<RHIColorAttachmentInfo> attachments{
-                RHIColorAttachmentInfo::Preset(context.textures.ao_output_ambient_only.tex->GetFormat()),
-                RHIColorAttachmentInfo::Preset(context.textures.camera_motion_vector.tex->GetFormat())
+                RHIColorAttachmentInfo::Preset(RasterTextures::AoFormat),
+                RHIColorAttachmentInfo::Preset(RasterTextures::CameraMotionFormat)
             };
             if (include_indirect) {
-                attachments.push_back(RHIColorAttachmentInfo::Preset(context.textures.ao_indirect.tex->GetFormat()));
+                attachments.push_back(RHIColorAttachmentInfo::Preset(RasterTextures::AoIndirectFormat));
             }
             GfxPsoCreateInfo pso_full_screen_info(
                 RHIRasterizeInfo::Preset(),
@@ -124,7 +129,7 @@ public:
             return pso_full_screen_info;
         };
 
-        ao_pipeline = context.manager.Raster()
+        ao_pipeline = manager.Raster()
                           .Vertex("core/utils/FullScreenQuad.hlsl")
                           .Pixel("pipelines/postprocess/lighting_effects/Ao.hlsl")
                           .Build<AoPipeline>(std::move(create_pso_func()));
@@ -132,27 +137,25 @@ public:
         {
             RtaoSampleModeMacros uniform_macros{};
             uniform_macros.SetMutation<RtaoPipeline::RTAO_COSINE_WEIGHTED>(false);
-            rtao_pipeline_uniform = context.manager.Compute<RtaoPipeline>(
+            rtao_pipeline_uniform = manager.Compute<RtaoPipeline>(
                 "pipelines/postprocess/lighting_effects/Rtao.hlsl", uniform_macros
             );
 
             RtaoSampleModeMacros cosine_macros{};
             cosine_macros.SetMutation<RtaoPipeline::RTAO_COSINE_WEIGHTED>(true);
-            rtao_pipeline_cosine = context.manager.Compute<RtaoPipeline>(
+            rtao_pipeline_cosine = manager.Compute<RtaoPipeline>(
                 "pipelines/postprocess/lighting_effects/Rtao.hlsl", cosine_macros
             );
         }
 
-        ssdo_pipeline = context.manager.Raster()
+        ssdo_pipeline = manager.Raster()
                             .Vertex("core/utils/FullScreenQuad.hlsl")
                             .Pixel("pipelines/postprocess/lighting_effects/Ssdo.hlsl")
                             .Build<SsdoPipeline>(create_pso_func(true));
 
-        ao_composite_pipeline = context.manager.Compute<AoCompositePipeline>(
+        ao_composite_pipeline = manager.Compute<AoCompositePipeline>(
             "pipelines/postprocess/lighting_effects/AoComposite.hlsl"
         );
-
-        CreateMotionVectorData(context);
     }
 
     // 创建CMV数据
@@ -341,26 +344,20 @@ public:
     );
 
     [[nodiscard]] CompositeRecordParameters PrepareComposite(
-        RasterContext&          context,
-        const RasterConfig&     ui_config,
-        const AoFrameResources& frame
+        const RasterConfig& ui_config,
+        Extent2D full_resolution,
+        Extent2D ao_resolution
     ) const {
+        if (!full_resolution.x || !full_resolution.y || !ao_resolution.x || !ao_resolution.y)
+            throw std::invalid_argument("AO composite requires nonzero extents");
         CompositeRecordParameters parameters{};
         auto&                     param = parameters.shader;
-        param.ao_tex                    = frame.Output().hdl;
-        param.color_tex                 = context.textures.lighting_output.hdl;
         param.ao_mode                   = static_cast<uint32>(ui_config.ao_mode);
-        param.is_half_resolution        = frame.half_resolution ? 1u : 0u;
-        param.full_resolution           = float2(context.textures.ao_output.GetSize());
+        param.is_half_resolution        = ui_config.ao_half_resolution ? 1u : 0u;
+        param.full_resolution           = float2(full_resolution.x, full_resolution.y);
         param.inv_full_resolution       = float2(1.0f) / param.full_resolution;
-        param.depth_tex                 = context.textures.depth_nearest_sampler.hdl;
-        param.normal_tex                = context.textures.normal.hdl;
-        param.indirect_tex              = frame.indirect.hdl;
-        param.ao_resolution             = float2(frame.Output().GetSize());
-        parameters.output               = context.textures.ao_output;
-        parameters.bindless             = context.bdls;
-        const uint2 res                 = uint2(parameters.output.GetSize());
-        parameters.groups               = uint3((res.x + 7u) / 8u, (res.y + 7u) / 8u, 1);
+        param.ao_resolution             = float2(ao_resolution.x, ao_resolution.y);
+        parameters.groups               = uint3((full_resolution.x + 7u) / 8u, (full_resolution.y + 7u) / 8u, 1);
         return parameters;
     }
 
@@ -374,11 +371,11 @@ public:
             .Dispatch(parameters.groups, "AO Composite Pass");
     }
 
-    void AddCompositeToGraph(
+    RENDER_API void AddCompositeToGraph(
         RenderGraph&            graph,
-        RasterContext&          context,
         const RasterConfig&     ui_config,
-        AoFrameResources        frame,
+        Extent2D                full_resolution,
+        Extent2D                ao_resolution,
         CompositeGraphResources resources
     );
 

@@ -29,7 +29,7 @@ namespace Moer::Render::Raster {
       ao_output,                                                                                                \
       Tex2DTag,                                                                                                 \
       TexConfig::Default(PF_R16G16B16A16_SFLOAT)                                                                \
-          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS))                                       \
+          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS).GraphTransient(!WITH_CUDA))             \
     X(TexHandle, denoiser_output, Tex2DTag, TexConfig::Default(PostprocessOutputFormat).Usage(E_SAMPLED_COLOR).GraphTransient()) \
     X(TexHandle, upsample_output, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))  \
     X(TexHandle, ssr_output, Tex2DTag, TexConfig::Default(PostprocessOutputFormat).Usage(E_SAMPLED_COLOR).GraphTransient()) \
@@ -92,7 +92,7 @@ namespace Moer::Render::Raster {
 // Used for AO half-resolution mode
 #define RASTER_TEXTURES_TABLE_DOWNSAMPLED                                                          \
     X(TexHandle, ao_indirect, Tex2DTag,                                                            \
-      TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))                             \
+      TexConfig::Default(AoIndirectFormat).Usage(E_SAMPLED_COLOR))                                \
     X(TexHandle, ao_history_geometry, Tex2DTag,                                                    \
       TexConfig::Default(PF_R32G32B32A32_UINT)                                                     \
           .Usage(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS))               \
@@ -102,25 +102,28 @@ namespace Moer::Render::Raster {
     X(TexHandle,                                                                                   \
       ao_output_ambient_only,                                                                      \
       Tex2DTag,                                                                                    \
-      TexConfig::Default(PF_R8_UNORM)                                                              \
+      TexConfig::Default(AoFormat)                                                                 \
           .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS))                          \
     X(TexHandle,                                                                                   \
       ao_output_ambient_only_1,                                                                    \
       Tex2DTag,                                                                                    \
-      TexConfig::Default(PF_R8_UNORM)                                                              \
+      TexConfig::Default(AoFormat)                                                                 \
           .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS))                          \
     X(TexHandle, ao_noisy, Tex2DTag,                                                           \
-      TexConfig::Default(PF_R8_UNORM)                                                        \
+      TexConfig::Default(AoFormat)                                                           \
           .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS))                     \
     X(TexHandle,                                                                                   \
       camera_motion_vector,                                                                        \
       Tex2DTag,                                                                                    \
-      TexConfig::Default(PF_R16G16_SFLOAT)                                                         \
+      TexConfig::Default(CameraMotionFormat)                                                      \
           .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS))
 
 struct RasterTextures {
     static constexpr EPixelFormat TonemappingOutputFormat = PF_R8G8B8A8_UNORM;
     static constexpr EPixelFormat PostprocessOutputFormat = PF_R16G16B16A16_SFLOAT;
+    static constexpr EPixelFormat AoFormat = PF_R8_UNORM;
+    static constexpr EPixelFormat CameraMotionFormat = PF_R16G16_SFLOAT;
+    static constexpr EPixelFormat AoIndirectFormat = PF_R16G16B16A16_SFLOAT;
     // Full-resolution textures
 #define X(TYPE, NAME, TEXTYPE, CONFIG) TYPE NAME;
     RASTER_TEXTURES_TABLE

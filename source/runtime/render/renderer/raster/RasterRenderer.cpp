@@ -1163,8 +1163,17 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 const auto& motion_vector_data = ao_pass->GetMotionVectorDataBuffer();
                 graph_resources.motion_vector_data =
                     ImportRasterBuffer(graph, "motion_vector_data", motion_vector_data.Get());
-                graph_resources.ao_output =
-                    import_texture("ao_output", raster_context.textures.ao_output.tex);
+#if WITH_CUDA
+                graph_resources.ao_output = import_texture("ao_output", raster_context.textures.ao_output.tex);
+#else
+                graph_resources.ao_output = graph.CreateTransientTexture("ao_output", RGTransientTextureDesc{
+                    .extent = Extent3D(scene_resolution.x, scene_resolution.y, 1),
+                    .format = RasterTextures::PostprocessOutputFormat,
+                    .usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT |
+                             ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_SRC |
+                             ETextureUsageFlags::TRANSFER_DST
+                });
+#endif
                 const RGTransientTextureDesc postprocess_desc{
                     .extent = Extent3D(scene_resolution.x, scene_resolution.y, 1),
                     .format = RasterTextures::PostprocessOutputFormat,
@@ -1393,9 +1402,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     );
                     ao_pass->AddCompositeToGraph(
                         graph,
-                        raster_context,
                         raster_config,
-                        ao_frame,
+                        Extent2D(scene_resolution),
+                        ao_frame.Output().GetSize(),
                         {
                             .ao_only = graph_resources.ao_final,
                             .lighting_output = graph_resources.lighting_output,
@@ -1408,6 +1417,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     processing_image_resource = graph_resources.ao_output;
                 } else {
                     processing_image_resource = graph_resources.lighting_output;
+                }
+                if (selected_framebuffer_name == "ao_output") {
+                    graph_resources.selected_framebuffer = processing_image_resource;
                 }
             }
 

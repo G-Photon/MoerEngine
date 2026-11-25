@@ -23,7 +23,8 @@ using namespace Moer::Render::Raster;
 
 void RunDisplayTransientContracts();
 void RunEffectsTransientContracts();
-int RunDisplayTransientScene(int argc, const char** argv, bool effects);
+void RunAoCompositeTransientContracts();
+int RunDisplayTransientScene(int argc, const char** argv, bool effects, bool ao_composite = false);
 
 namespace {
 
@@ -430,6 +431,7 @@ int main(int argc, const char** argv) {
     if (argc > 1 && std::string_view(argv[1]) == "--scene") return SceneSmoke(argc, argv);
     if (argc > 1 && std::string_view(argv[1]) == "--display-scene") return RunDisplayTransientScene(argc, argv, false);
     if (argc > 1 && std::string_view(argv[1]) == "--effects-scene") return RunDisplayTransientScene(argc, argv, true);
+    if (argc > 1 && std::string_view(argv[1]) == "--ao-composite-scene") return RunDisplayTransientScene(argc, argv, false, true);
     bool device_ready = false, tasks_ready = false;
     try {
         LogSystem::Init();
@@ -442,6 +444,8 @@ int main(int argc, const char** argv) {
             RunDisplayTransientContracts();
         } else if (argc > 1 && std::string_view(argv[1]) == "--effects") {
             RunEffectsTransientContracts();
+        } else if (argc > 1 && std::string_view(argv[1]) == "--ao-composite") {
+            RunAoCompositeTransientContracts();
         } else {
             Numeric();
             TonemappingTransient();

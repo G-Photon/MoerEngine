@@ -232,7 +232,7 @@ set_target_properties(TestShaderEffectsSmoke PROPERTIES FOLDER ${moer_test_folde
 # Opt in: requires a Vulkan ray-tracing GPU and the configured scene assets.
 option(MOER_SHADER_GPU_TESTS "Register shader effect rendering smoke tests" OFF)
 if (NOT APPLE)
-    add_executable(TestAaTransient "AaTransientTest.cpp" "DisplayTransientTest.cpp" "EffectsTransientTest.cpp"
+    add_executable(TestAaTransient "AaTransientTest.cpp" "DisplayTransientTest.cpp" "EffectsTransientTest.cpp" "AoCompositeTransientTest.cpp"
         "${moer_source_dir}/runtime/render/scene/camera/Camera.cpp")
     target_link_libraries(TestAaTransient PRIVATE Moer::Runtime)
     set_target_properties(TestAaTransient PROPERTIES FOLDER ${moer_test_folder})
@@ -252,6 +252,13 @@ if (NOT APPLE)
         add_test(NAME EffectsTransientContract COMMAND $<TARGET_FILE:TestAaTransient> --effects)
         set_tests_properties(EffectsTransientContract PROPERTIES
             WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 180 LABELS "gpu;shader" RESOURCE_LOCK shader_gpu)
+        add_test(NAME AoCompositeTransientContract COMMAND $<TARGET_FILE:TestAaTransient> --ao-composite)
+        set_tests_properties(AoCompositeTransientContract PROPERTIES
+            WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 150 LABELS "gpu;shader" RESOURCE_LOCK shader_gpu)
+        add_test(NAME AoCompositeTransientScene COMMAND $<TARGET_FILE:TestAaTransient> --ao-composite-scene --set=Render.Raster.RDG.ParallelRecording=false)
+        add_test(NAME AoCompositeTransientSceneParallel COMMAND $<TARGET_FILE:TestAaTransient> --ao-composite-scene --set=Render.Raster.RDG.ParallelRecording=true)
+        set_tests_properties(AoCompositeTransientScene AoCompositeTransientSceneParallel PROPERTIES
+            WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 150 LABELS "gpu;shader;scene" RESOURCE_LOCK shader_gpu)
         add_test(NAME EffectsTransientScene COMMAND $<TARGET_FILE:TestAaTransient> --effects-scene --set=Render.Raster.RDG.ParallelRecording=false)
         add_test(NAME EffectsTransientSceneParallel COMMAND $<TARGET_FILE:TestAaTransient> --effects-scene --set=Render.Raster.RDG.ParallelRecording=true)
         set_tests_properties(EffectsTransientScene EffectsTransientSceneParallel PROPERTIES

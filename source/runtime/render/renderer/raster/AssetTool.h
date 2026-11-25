@@ -83,8 +83,8 @@ struct TexConfig {
         return *this;
     }
 
-    TexConfig& GraphTransient() {
-        graph_transient = true;
+    TexConfig& GraphTransient(bool enabled = true) {
+        graph_transient = enabled;
         return *this;
     }
 
