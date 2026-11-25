@@ -6,6 +6,24 @@
 [[vk::binding(0, 0)]] Texture2D    input_image;
 [[vk::binding(1, 0)]] Buffer<uint> exposure;
 [[vk::binding(2, 0)]] StructuredBuffer<uint> histogram;
+[[vk::binding(3, 0)]] StructuredBuffer<uint4> lpm_control;
+
+#define A_HLSL 1
+#define A_GPU 1
+#include "thirdparty/fidelityfx-lpm/ffx_a.h"
+AU4 LpmFilterCtl(AU1 index) { return lpm_control[index]; }
+#define LPM_NO_SETUP 1
+#include "thirdparty/fidelityfx-lpm/ffx_lpm.h"
+
+float3 LpmToneMapping(float3 color) {
+    color = max(color, 0.0f);
+    // LpmFilter normalizes RGB by its largest channel; pure black needs no mapping.
+    if (max(color.r, max(color.g, color.b)) <= 0.0f) {
+        return 0.0f;
+    }
+    LpmFilter(color.r, color.g, color.b, false, LPM_CONFIG_709_709);
+    return color;
+}
 
 // ACES 拟合函数
 float3 ACESFilm(float3 x) {
@@ -73,7 +91,9 @@ float3 AutoExposure(float3 hdr_color, float2 uv) {
         return float3(0.0f, 0.0f, 0.0f);
     }
     
-    if (param.ae.aces_tonemapping_enabled) {
+    if (param.lpm_enabled) {
+        return LpmToneMapping(hdr_color * (param.exposure_ev / target_exposure));
+    } else if (param.ae.aces_tonemapping_enabled) {
         return AE_ACESToneMapping(hdr_color, target_exposure, param.exposure_ev);
     } else {
         return AE_DefaultToneMapping(hdr_color, target_exposure, param.exposure_ev);
@@ -82,6 +102,10 @@ float3 AutoExposure(float3 hdr_color, float2 uv) {
 
 float3 ManualExposure(float3 hdr_color) {
     hdr_color *= param.exposure_ev;
+
+    if (param.lpm_enabled) {
+        return LpmToneMapping(hdr_color);
+    }
 
     float3 color = (param.reinhard_enabled ? hdr_color / (hdr_color + 1.0) : hdr_color);
 

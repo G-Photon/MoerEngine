@@ -232,6 +232,15 @@ struct RasterConfig {
     float tonemapping_exposure_ev      = -2.7f;
     bool  tonemapping_reinhard_enabled = true;
 
+    struct TonemappingLpmConfig {
+        bool   enabled              = false;
+        float  hdr_max              = 256.0f;
+        float  exposure_range_stops = 8.0f;
+        float  contrast             = 0.25f;
+        float  saturation           = 0.0f;
+        float2 highlight_crosstalk  = float2(0.5f, 1.0f / 32.0f);
+    } tonemapping_lpm;
+
     struct TonemappingAutoExposureConfig {
         bool enabled = true;
 

@@ -8,6 +8,8 @@
 #include "RasterResource.h"
 #include "rendergraph/RenderGraph.h"
 
+#include <array>
+
 namespace Moer::Render::Raster {
 
 class TonemappingHistogramPipeline : public ComputePipeline {
@@ -40,8 +42,9 @@ public:
     DEFINE_SHADER_TEX(input_image); // input
     DEFINE_SHADER_BUFFER(exposure); // input
     DEFINE_SHADER_BUFFER(histogram);
+    DEFINE_SHADER_BUFFER(lpm_control);
 
-    DEFINE_SHADER_ARGS(param, input_image, exposure, histogram);
+    DEFINE_SHADER_ARGS(param, input_image, exposure, histogram, lpm_control);
 };
 
 /**
@@ -54,6 +57,10 @@ public:
  */
 class RENDER_API TonemappingPass {
 public:
+    using LpmControlBlock = std::array<uint4, 24>;
+
+    [[nodiscard]] static LpmControlBlock PrepareLpm(const RasterConfig::TonemappingLpmConfig& config);
+
     struct GraphResources {
         RenderGraph::TextureHandle input{};
         RenderGraph::BufferHandle  exposure{};
@@ -65,6 +72,7 @@ public:
         TextureWithHandle                input{}, output{};
         BufferRef                        exposure{};
         uint3                            histogram_groups{};
+        LpmControlBlock                  lpm_control{};
     };
 
     struct GraphResult {
@@ -96,7 +104,9 @@ private:
     static void RecordClear(CommandList& commands, BufferView histogram);
     void RecordHistogram(CommandList& commands, const RecordParameters& parameters, BufferView histogram);
     void RecordExposure(CommandList& commands, const RecordParameters& parameters, BufferView histogram);
-    void RecordTonemapping(CommandList& commands, const RecordParameters& parameters, BufferView histogram);
+    void RecordTonemapping(
+        CommandList& commands, const RecordParameters& parameters, BufferView histogram, BufferView lpm_control
+    );
 
     TonemappingPipeline          tonemapping_pipeline;
     TonemappingHistogramPipeline tonemapping_histogram_pipeline;

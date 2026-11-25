@@ -235,6 +235,7 @@ struct TonemappingPipelineBindlessParam {
     uint  reinhard_enabled;
 
     float debug_param;
+    uint  lpm_enabled;
 };
 
 static CONST uint TONEMAPPING_HISTOGRAM_GROUP_X = 16;

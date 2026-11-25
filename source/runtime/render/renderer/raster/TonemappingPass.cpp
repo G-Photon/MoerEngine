@@ -85,6 +85,10 @@ TonemappingPass::RecordParameters TonemappingPass::Prepare(
         param.exposure_ev = std::exp2f(ui_config.tonemapping_exposure_ev);
 
         param.reinhard_enabled = ui_config.tonemapping_reinhard_enabled ? 1 : 0;
+        param.lpm_enabled = ui_config.tonemapping_lpm.enabled ? 1 : 0;
+        if (param.lpm_enabled) {
+            parameters.lpm_control = PrepareLpm(ui_config.tonemapping_lpm);
+        }
 
         param.debug_param = ui_config.debug_param;
     }
@@ -120,6 +124,26 @@ TonemappingPass::GraphResult TonemappingPass::AddRecordPasses(
         .usage = EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TEXTURE_BUFFER |
                  EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC,
     });
+    const auto lpm_control = graph.CreateTransientBuffer("Tonemapping.LpmControl", RGTransientBufferDesc{
+        .element_count = 24,
+        .stride = sizeof(uint4),
+        .usage = EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST,
+    });
+    graph.AddRecordPass(
+        "Tonemapping.UploadLpm",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(lpm_control, RenderGraph::BufferAccessType::TransferDestination);
+        },
+        [&graph, lpm_control, prepared](CommandList& commands) {
+            const auto& control = prepared.Get().lpm_control;
+            commands.CopyFrom(
+                std::span<const byte>(reinterpret_cast<const byte*>(control.data()), sizeof(control)),
+                graph.GetPhysicalBuffer(lpm_control)->GetView(), "LPM control upload"
+            );
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
+    );
     graph.AddRecordPass(
         "Tonemapping.ClearHistogram",
         [=](RenderGraph::PassBuilder& builder) {
@@ -165,11 +189,15 @@ TonemappingPass::GraphResult TonemappingPass::AddRecordPasses(
                 .Read(resources.input, RenderGraph::TextureAccessType::Sampled)
                 .Read(histogram, RenderGraph::BufferAccessType::ShaderRead)
                 .Read(resources.exposure, RenderGraph::BufferAccessType::ShaderRead)
+                .Read(lpm_control, RenderGraph::BufferAccessType::ShaderRead)
                 .Write(resources.tonemapping_output, RenderGraph::TextureAccessType::ColorAttachment);
         },
-        [this, &graph, histogram, prepared](CommandList& commands) {
+        [this, &graph, histogram, lpm_control, prepared](CommandList& commands) {
             ScopedGpuMarker marker(commands, "Pass: Tonemapping.Apply", GpuMarkerPalette::Pass());
-            RecordTonemapping(commands, prepared.Get(), graph.GetPhysicalBuffer(histogram)->GetView());
+            RecordTonemapping(
+                commands, prepared.Get(), graph.GetPhysicalBuffer(histogram)->GetView(),
+                graph.GetPhysicalBuffer(lpm_control)->GetView()
+            );
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
     );
@@ -199,9 +227,11 @@ void TonemappingPass::RecordExposure(
 }
 
 void TonemappingPass::RecordTonemapping(
-    CommandList& commands, const RecordParameters& parameters, BufferView histogram
+    CommandList& commands, const RecordParameters& parameters, BufferView histogram, BufferView lpm_control
 ) {
-    commands.Gfx(tonemapping_pipeline, parameters.shader, parameters.input.tex, parameters.exposure, histogram)
+    commands.Gfx(
+        tonemapping_pipeline, parameters.shader, parameters.input.tex, parameters.exposure, histogram, lpm_control
+    )
         .Draw("Tonemapping Pass", parameters.output.GetRect2D(), RasterTool::GetFullScreenDrawDatas(),
             ColorAttachment(parameters.output.tex));
 }

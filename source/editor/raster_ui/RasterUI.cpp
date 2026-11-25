@@ -703,12 +703,31 @@ void RasterUI::ShowConfig() {
         // 自动曝光或手动曝光都可以调整Exposure EV
         ImGui::SliderFloat("Exposure EV", &m_config.tonemapping_exposure_ev, -15.0f, 10.0f);
 
+        auto& lpm = m_config.tonemapping_lpm;
+        ImGui::Checkbox("AMD LPM", &lpm.enabled);
+        if (lpm.enabled) {
+            ImGui::SliderFloat(
+                "HDR Maximum", &lpm.hdr_max, 1.0f, 65504.0f, "%.1f", ImGuiSliderFlags_Logarithmic
+            );
+            ImGui::SliderFloat("Dynamic Range (stops)", &lpm.exposure_range_stops, 1.0f, 16.0f);
+            ImGui::SliderFloat("LPM Contrast", &lpm.contrast, 0.0f, 1.0f);
+            ImGui::SliderFloat("LPM Saturation", &lpm.saturation, -0.5f, 1.0f);
+            ImGui::SliderFloat(
+                "Green Crosstalk", &lpm.highlight_crosstalk.x, 0.001f, 1.0f, "%.3f", ImGuiSliderFlags_Logarithmic
+            );
+            ImGui::SliderFloat(
+                "Blue Crosstalk", &lpm.highlight_crosstalk.y, 0.001f, 1.0f, "%.3f", ImGuiSliderFlags_Logarithmic
+            );
+        }
+
         // 自动曝光
         if (m_config.tonemapping_ae.enabled) {
 
             ImGui::Checkbox("Visualize (Try this!)", &m_config.tonemapping_ae.debug_visualize);
 
-            ImGui::Checkbox("Enable ACES ToneMapping", &m_config.tonemapping_ae.aces_tonemapping_enabled);
+            if (!lpm.enabled) {
+                ImGui::Checkbox("Enable ACES ToneMapping", &m_config.tonemapping_ae.aces_tonemapping_enabled);
+            }
 
             ImGui::SliderFloat("Luminance(log2) Min", &m_config.tonemapping_ae.log2lum_min, -20.0f, 5.0f);
             ImGui::SliderFloat("Luminance(log2) Max", &m_config.tonemapping_ae.log2lum_max, -5.0f, 20.0f);
@@ -740,7 +759,9 @@ void RasterUI::ShowConfig() {
         } else {
 
             // 手动曝光
-            ImGui::Checkbox("Enable Reinhard Tone Mapping", &m_config.tonemapping_reinhard_enabled);
+            if (!lpm.enabled) {
+                ImGui::Checkbox("Enable Reinhard Tone Mapping", &m_config.tonemapping_reinhard_enabled);
+            }
         }
 
         ImGui::TreePop();

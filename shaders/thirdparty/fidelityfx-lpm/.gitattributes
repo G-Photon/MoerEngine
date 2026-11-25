@@ -1,0 +1,3 @@
+# Preserve AMD's exact upstream bytes, including line endings and whitespace.
+ffx_a.h -text -whitespace
+ffx_lpm.h -text -whitespace
