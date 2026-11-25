@@ -963,7 +963,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             raster_ao_frame = ao_pass->SelectFrameResources(raster_context, raster_config);
         }
         const uint2 scene_resolution = raster_context.GetResolution();
-        TextureWithHandle   processing_image = raster_context.textures.ao_output;
         RenderGraph::TextureHandle processing_image_resource{};
         TextureView         selected_framebuffer_view{};
         TextureView         window_framebuffer_view{};
@@ -1166,10 +1165,14 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     ImportRasterBuffer(graph, "motion_vector_data", motion_vector_data.Get());
                 graph_resources.ao_output =
                     import_texture("ao_output", raster_context.textures.ao_output.tex);
-                graph_resources.denoiser_output =
-                    import_texture("denoiser_output", raster_context.textures.denoiser_output.tex);
-                graph_resources.ssr_output =
-                    import_texture("ssr_output", raster_context.textures.ssr_output.tex);
+                const RGTransientTextureDesc postprocess_desc{
+                    .extent = Extent3D(scene_resolution.x, scene_resolution.y, 1),
+                    .format = RasterTextures::PostprocessOutputFormat,
+                    .usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT |
+                             ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST
+                };
+                graph_resources.denoiser_output = graph.CreateTransientTexture("denoiser_output", postprocess_desc);
+                graph_resources.ssr_output = graph.CreateTransientTexture("ssr_output", postprocess_desc);
                 graph_resources.aa_output =
                     graph.CreateTransientTexture("aa_output", RGTransientTextureDesc{
                         .extent = Extent3D(scene_resolution.x, scene_resolution.y, 1),
@@ -1402,10 +1405,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                             .indirect = graph_resources.ao_indirect
                         }
                     );
-                    processing_image = raster_context.textures.ao_output;
                     processing_image_resource = graph_resources.ao_output;
                 } else {
-                    processing_image = raster_context.textures.lighting_output;
                     processing_image_resource = graph_resources.lighting_output;
                 }
             }
@@ -1428,8 +1429,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 cmd_list.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
                 // The interop owner releases Sampled images to CUDA in
                 // GENERAL, waits for CUDA, then reacquires them as Sampled.
-                processing_image =
-                    tensor_rt_pass->Process(raster_context, raster_config, *raster_ao_frame);
+                tensor_rt_pass->Process(raster_context, raster_config, *raster_ao_frame);
             }
 #endif
             auto add_postprocess = [&](RenderGraph& graph) {
@@ -1437,22 +1437,22 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 if (has_meshes) {
                     bilateral_filter_denoiser_pass->AddToGraph(
                         graph,
-                        raster_context,
                         raster_config,
-                        processing_image,
+                        Extent2D(scene_resolution),
                         {.input           = processing_image_resource,
                          .denoiser_output = graph_resources.denoiser_output}
                     );
                     if (raster_config.denoiser_mode != EDenoiserMode::NONE) {
-                        processing_image          = raster_context.textures.denoiser_output;
                         processing_image_resource = graph_resources.denoiser_output;
+                    }
+                    if (selected_framebuffer_name == "denoiser_output") {
+                        graph_resources.selected_framebuffer = processing_image_resource;
                     }
                     ssr_pass->AddToGraph(
                         graph,
-                        raster_context,
                         raster_config,
                         camera,
-                        processing_image,
+                        Extent2D(scene_resolution),
                         {.input          = processing_image_resource,
                          .normal         = graph_resources.normal,
                          .depth          = graph_resources.depth,
@@ -1460,9 +1460,12 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                          .ssr_output     = graph_resources.ssr_output}
                     );
                     if (raster_config.ssr_is_ssr_enabled != 0) {
-                        processing_image          = raster_context.textures.ssr_output;
                         processing_image_resource = graph_resources.ssr_output;
                     }
+                }
+                if (selected_framebuffer_name == "ssr_output" ||
+                    (!has_meshes && selected_framebuffer_name == "denoiser_output")) {
+                    graph_resources.selected_framebuffer = processing_image_resource;
                 }
                 if (record_gaussians) {
                     gaussian_graph = m_gaussian_splat_pass->ImportGraphResources(graph);
@@ -1474,20 +1477,18 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         gaussian_parameters.shadow_data ? graph_resources.shadow_maps :
                                                           RenderGraph::TokenHandle{}
                     );
-                    const auto composite = m_gaussian_composite_pass->Prepare(
-                        processing_image,
-                        m_gaussian_splat_pass->GetColor(),
-                        m_gaussian_splat_pass->GetTransmittance(),
-                        BufferRef(m_gaussian_splat_pass->GetStatusBuffer().GetBuffer()),
-                        m_gaussian_splat_pass->GetRanges(),
-                        EGaussianDebugView::Color,
-                        frame_packet.gaussian_view_settings
-                    );
-                    auto composite_resource = ImportRasterTexture(graph, "gs_scene_composite", composite.output.tex.Get());
+                    const GaussianCompositePass::RecordParameters composite{
+                        .settings = frame_packet.gaussian_view_settings
+                    };
+                    const auto composite_resource = graph.CreateTransientTexture("gs_scene_composite", RGTransientTextureDesc{
+                        .extent = Extent3D(scene_resolution.x, scene_resolution.y, 1),
+                        .format = GaussianCompositePass::OutputFormat,
+                        .usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS |
+                                 ETextureUsageFlags::TRANSFER_SRC
+                    });
                     m_gaussian_composite_pass->AddToGraph(graph, composite, processing_image_resource,
                         gaussian_graph.color, gaussian_graph.transmittance, gaussian_graph.status,
                         gaussian_graph.ranges, composite_resource);
-                    processing_image = composite.output;
                     processing_image_resource = composite_resource;
                 }
                 // Reserved boundary for a future transparent-geometry pass.

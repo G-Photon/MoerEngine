@@ -30,9 +30,9 @@ namespace Moer::Render::Raster {
       Tex2DTag,                                                                                                 \
       TexConfig::Default(PF_R16G16B16A16_SFLOAT)                                                                \
           .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS))                                       \
-    X(TexHandle, denoiser_output, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))  \
+    X(TexHandle, denoiser_output, Tex2DTag, TexConfig::Default(PostprocessOutputFormat).Usage(E_SAMPLED_COLOR).GraphTransient()) \
     X(TexHandle, upsample_output, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))  \
-    X(TexHandle, ssr_output, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))       \
+    X(TexHandle, ssr_output, Tex2DTag, TexConfig::Default(PostprocessOutputFormat).Usage(E_SAMPLED_COLOR).GraphTransient()) \
     X(TexHandle, aa_texture_1, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR).GraphTransient()) \
     X(TexHandle, aa_texture_2, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR).GraphTransient()) \
     X(TexHandle, aa_texture_3, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))     \
@@ -120,6 +120,7 @@ namespace Moer::Render::Raster {
 
 struct RasterTextures {
     static constexpr EPixelFormat TonemappingOutputFormat = PF_R8G8B8A8_UNORM;
+    static constexpr EPixelFormat PostprocessOutputFormat = PF_R16G16B16A16_SFLOAT;
     // Full-resolution textures
 #define X(TYPE, NAME, TEXTYPE, CONFIG) TYPE NAME;
     RASTER_TEXTURES_TABLE

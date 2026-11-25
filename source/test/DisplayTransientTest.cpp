@@ -1,4 +1,5 @@
 #include "Engine.h"
+#include "config/CVarSystem.h"
 #include "log/LogSystem.h"
 #include "renderer/raster/GaussianCompositePass.h"
 #include "renderer/raster/GaussianImageExport.h"
@@ -333,7 +334,7 @@ void RunDisplayTransientContracts() {
     std::cout << "[TESTCASE][PASS] DisplayTransient: 24 PNG pixel comparisons, 4 rejected overflow frames, 4 rejected mismatches, 56 busy rejections, 36 debug cases" << std::endl;
 }
 
-int RunDisplayTransientScene(int argc, const char** argv) {
+int RunDisplayTransientScene(int argc, const char** argv, bool effects) {
     TestDirectory directory;
     Engine engine;
     try {
@@ -345,6 +346,9 @@ int RunDisplayTransientScene(int argc, const char** argv) {
         config->validation_selected_frame_buffer_name = "tonemapping_output";
         constexpr std::array modes{EGaussianDebugView::Color, EGaussianDebugView::Transmittance,
             EGaussianDebugView::TileCoverage, EGaussianDebugView::ShadowVisibility, EGaussianDebugView::ShadowDepth};
+        const uint32 phase_count = effects ? 12 : uint32(modes.size());
+        const auto recording = CVar::Find("Render.Raster.RDG.ParallelRecording");
+        Require(recording.has_value(), "Scene recording policy was not registered");
         uint32 phase = 0, phase_frames = 0, ready_frames = 0, exported_images = 0;
         bool imported = false, request_sent = false;
         Extent2D scene_size(320, 180);
@@ -367,13 +371,24 @@ int RunDisplayTransientScene(int argc, const char** argv) {
                     Require(scene.CreateGaussianInstance(asset) != entt::null, "Cannot create Gaussian scene fixture");
                     imported = true;
                 }
-                if (phase == modes.size()) { engine.RequestExit(); return; }
+                if (phase == phase_count) { engine.RequestExit(); return; }
                 if (phase_frames == 0) {
                     scene_size = phase % 2 ? Extent2D(257, 129) : Extent2D(320, 180);
                     config->active_viewport_mode = phase % 2 ? EEditorViewportMode::Game : EEditorViewportMode::Scene;
                     auto settings = scene.GetGaussianViewSettings();
                     settings.display_mode = EGaussianDisplayMode::Engine;
-                    settings.debug_view = modes[phase];
+                    settings.debug_view = effects ? EGaussianDebugView::Color : modes[phase];
+                    if (effects) {
+                        auto& raster = config->raster_config;
+                        const uint32 flags = (phase % 12) / 3;
+                        raster.denoiser_mode = flags & 1 ? EDenoiserMode::BILATERAL_FILTER : EDenoiserMode::NONE;
+                        raster.ssr_is_ssr_enabled = (flags & 2) != 0;
+                        constexpr std::array previews{"denoiser_output", "ssr_output", "tonemapping_output"};
+                        config->validation_selected_frame_buffer_name = previews[phase % 3];
+                        std::cout << "[Effects scene] phase=" << phase << " flags=" << flags
+                                  << " parallel=" << recording->value
+                                  << " preview=" << config->validation_selected_frame_buffer_name << std::endl;
+                    }
                     Require(scene.SetGaussianViewSettings(settings), "Scene rejected Gaussian display settings");
                     std::cout << "[Display scene] phase=" << phase << " size=" << scene_size.x << "x" << scene_size.y << std::endl;
                 }
@@ -393,7 +408,7 @@ int RunDisplayTransientScene(int argc, const char** argv) {
                     std::cout << "[Display scene] visible=" << counts.visible_count
                               << " tile_pairs=" << counts.tile_pair_count << std::endl;
                     const auto pixels = ReadPng(path, scene_size);
-                    if (modes[phase] == EGaussianDebugView::Transmittance) {
+                    if (!effects && modes[phase] == EGaussianDebugView::Transmittance) {
                         const auto [minimum, maximum] = std::minmax_element(pixels.begin(), pixels.end());
                         Require(*minimum < 230 && *maximum > 250,
                                 "Gaussian transmittance PNG contains no visible splat against its background");
@@ -417,10 +432,14 @@ int RunDisplayTransientScene(int argc, const char** argv) {
                 return packet;
             }
         });
-        Require(imported && phase == modes.size() && exported_images == 5,
+        Require(imported && phase == phase_count && exported_images == phase_count,
                 "Display scene did not finish every debug/export phase");
         engine.ShutDown();
-        std::cout << "[TESTCASE][PASS] DisplayTransient scene: 5 Gaussian views and PNG exports, resize, Scene/Game gizmos" << std::endl;
+        if (effects) {
+            std::cout << "[TESTCASE][PASS] EffectsTransient scene: 12 denoiser/SSR/preview phases with visible Gaussian PNG exports" << std::endl;
+        } else {
+            std::cout << "[TESTCASE][PASS] DisplayTransient scene: 5 Gaussian views and PNG exports, resize, Scene/Game gizmos" << std::endl;
+        }
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "[TESTCASE][FAIL] DisplayTransient scene " << error.what() << std::endl;

@@ -87,7 +87,7 @@ GaussianCompositePass::RecordParameters GaussianCompositePass::Prepare(
         state.output.tex = RenderDevice::Get().CreateTexture(
             "Gaussian scene composite",
             Extent3D(size.x, size.y, 1),
-            PF_R32G32B32A32_SFLOAT,
+            OutputFormat,
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS |
                 ETextureUsageFlags::TRANSFER_SRC
         );
@@ -158,22 +158,10 @@ RenderGraph::PassHandle GaussianCompositePass::AddToGraph(
     RenderGraph::BufferHandle  ranges,
     RenderGraph::TextureHandle output
 ) {
-    const auto table = graph.ImportToken("Raster.bindless", m_impl->bindless.Get());
-    graph.AddRecordPass(
-        "GaussianComposite.Publish",
-        [=](RenderGraph::PassBuilder& builder) {
-            builder.Write(table).TranslateSerialControl();
-        },
-        [bindless = m_impl->bindless](CommandList& commands) {
-            commands.UpdateBindlessArray(bindless);
-        },
-        RenderGraph::PassRecordPolicy::Serial
-    );
     return graph.AddRecordPass(
         "GaussianComposite",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
-                .Read(table)
                 .Read(input, RenderGraph::TextureAccessType::Sampled)
                 .Read(color, RenderGraph::TextureAccessType::Sampled)
                 .Read(transmittance, RenderGraph::TextureAccessType::Sampled)
@@ -181,8 +169,15 @@ RenderGraph::PassHandle GaussianCompositePass::AddToGraph(
                 .Read(ranges, RenderGraph::BufferAccessType::ShaderRead)
                 .Write(output, RenderGraph::TextureAccessType::Storage);
         },
-        [this, parameters](CommandList& commands) {
-            RecordCompositeCommands(commands, parameters);
+        [this, &graph, parameters, input, color, transmittance, status, ranges, output](CommandList& commands) {
+            auto resolved = parameters;
+            resolved.input.tex = graph.GetPhysicalTexture(input);
+            resolved.output.tex = graph.GetPhysicalTexture(output);
+            resolved.color = graph.GetPhysicalTexture(color);
+            resolved.transmittance = graph.GetPhysicalTexture(transmittance);
+            resolved.status = graph.GetPhysicalBuffer(status);
+            resolved.ranges = graph.GetPhysicalBuffer(ranges);
+            RecordCompositeCommands(commands, resolved);
         },
         RenderGraph::PassRecordPolicy::Serial
     );

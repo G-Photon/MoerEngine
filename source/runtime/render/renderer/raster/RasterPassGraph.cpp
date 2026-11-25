@@ -752,32 +752,36 @@ void RtaoDenoiserPass::AddToGraph(
 
 void BilateralFilterDenoiserPass::AddToGraph(
     RenderGraph& graph,
-    const RasterContext& context,
     const RasterConfig& ui_config,
-    TextureWithHandle input_image,
+    Extent2D extent,
     GraphResources resources
 ) {
     MOER_PROFILE_SCOPE("Raster.AddToGraph.BilateralFilterDenoiserPass");
-    auto prepared = graph.AddSetupPass(
-        "BilateralDenoise.Prepare",
-        std::move(input_image),
-        [this, &context, &ui_config](const TextureWithHandle& input) {
-            return Prepare(context, ui_config, input);
-        }
-    );
-    if (!prepared.IsValid()) {
-        return;
-    }
-
+    if (ui_config.denoiser_mode == EDenoiserMode::NONE) return;
+    if (!extent.x || !extent.y) throw std::invalid_argument("Bilateral denoising requires a nonzero extent");
+    auto prepared = std::make_shared<RecordParameters>(Prepare(ui_config, extent));
+    const auto bindings = graph.ImportToken("BilateralDenoise.bindings", prepared.get());
+    graph.AddRecordPass("BilateralDenoise.PublishBindings",
+        [=](RenderGraph::PassBuilder& builder) { builder.Write(bindings); },
+        [&, prepared, resources](CommandList& commands) {
+            prepared->bindless = RenderDevice::Get().CreateBindlessArray(4);
+            prepared->input.tex = graph.GetPhysicalTexture(resources.input);
+            prepared->input.hdl = prepared->bindless->AllocateTexture(
+                prepared->input.tex->GetView(), {SF_LINEAR, SAM_REPEAT});
+            prepared->output.tex = graph.GetPhysicalTexture(resources.denoiser_output);
+            prepared->shader.input_image = prepared->input.hdl;
+            commands.UpdateBindlessArray(prepared->bindless);
+        }, RenderGraph::PassRecordPolicy::Serial);
     graph.AddRecordPass(
         "BilateralDenoise",
-        [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.input, RenderGraph::TextureAccessType::Sampled)
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
+                .Read(bindings).Read(resources.input, RenderGraph::TextureAccessType::Sampled)
                 .Write(resources.denoiser_output, RenderGraph::TextureAccessType::ColorAttachment);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "BilateralDenoise", [&] {
-                Record(cmd_list, prepared.Get());
+                Record(cmd_list, *prepared);
             });
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
@@ -786,28 +790,36 @@ void BilateralFilterDenoiserPass::AddToGraph(
 
 void SsrPass::AddToGraph(
     RenderGraph& graph,
-    const RasterContext& context,
     const RasterConfig& ui_config,
     const Camera& camera,
-    TextureWithHandle input_image,
+    Extent2D extent,
     GraphResources resources
 ) {
     MOER_PROFILE_SCOPE("Raster.AddToGraph.SsrPass");
-    auto prepared = graph.AddSetupPass(
-        "ScreenSpaceReflection.Prepare",
-        std::move(input_image),
-        [this, &context, &ui_config, &camera](const TextureWithHandle& input) {
-            return Prepare(context, ui_config, camera, input);
-        }
-    );
-    if (!prepared.IsValid()) {
-        return;
-    }
-
+    if (!ui_config.ssr_is_ssr_enabled) return;
+    if (!extent.x || !extent.y) throw std::invalid_argument("SSR requires a nonzero extent");
+    auto prepared = std::make_shared<RecordParameters>(Prepare(ui_config, camera, extent));
+    const auto bindings = graph.ImportToken("ScreenSpaceReflection.bindings", prepared.get());
+    graph.AddRecordPass("ScreenSpaceReflection.PublishBindings",
+        [=](RenderGraph::PassBuilder& builder) { builder.Write(bindings); },
+        [&, prepared, resources](CommandList& commands) {
+            prepared->bindless = RenderDevice::Get().CreateBindlessArray(8);
+            const auto bind = [&](RenderGraph::TextureHandle resource, Sampler sampler = {SF_LINEAR, SAM_REPEAT}) {
+                return prepared->bindless->AllocateTexture(graph.GetPhysicalTexture(resource)->GetView(), sampler);
+            };
+            prepared->input.tex = graph.GetPhysicalTexture(resources.input);
+            prepared->output.tex = graph.GetPhysicalTexture(resources.ssr_output);
+            prepared->shader.color_tex = bind(resources.input);
+            prepared->shader.normal_tex = bind(resources.normal);
+            prepared->shader.depth_tex = bind(resources.depth, {SF_LINEAR, SAM_CLAMP_TO_EDGE});
+            prepared->shader.gbuffer_metal_rough_ao = bind(resources.metal_rough_ao);
+            commands.UpdateBindlessArray(prepared->bindless);
+        }, RenderGraph::PassRecordPolicy::Serial);
     graph.AddRecordPass(
         "ScreenSpaceReflection",
-        [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.input, RenderGraph::TextureAccessType::Sampled)
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
+                .Read(bindings).Read(resources.input, RenderGraph::TextureAccessType::Sampled)
                 .Read(resources.normal, RenderGraph::TextureAccessType::Sampled)
                 .Read(resources.depth, RenderGraph::TextureAccessType::Sampled)
                 .Read(resources.metal_rough_ao, RenderGraph::TextureAccessType::Sampled)
@@ -815,7 +827,7 @@ void SsrPass::AddToGraph(
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "ScreenSpaceReflection", [&] {
-                Record(cmd_list, prepared.Get());
+                Record(cmd_list, *prepared);
             });
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed

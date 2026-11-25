@@ -52,30 +52,28 @@ public:
         TextureWithHandle            output{};
     };
 
-    SsrPass(RasterContext& context) {
+    SsrPass(RasterContext& context) : SsrPass(context.manager, RasterTextures::PostprocessOutputFormat) {}
+
+    SsrPass(ShaderManager& manager, EPixelFormat output_format) {
         GfxPsoCreateInfo pso_full_screen_info(
             RHIRasterizeInfo::Preset(),
             {},
-            {RHIColorAttachmentInfo::Preset(context.textures.ssr_output.tex->GetFormat())}
+            {RHIColorAttachmentInfo::Preset(output_format)}
         );
 
-        ssr_pipeline = context.manager.Raster()
+        ssr_pipeline = manager.Raster()
                            .Vertex("core/utils/FullScreenQuad.hlsl")
                            .Pixel("pipelines/postprocess/lighting_effects/Ssr.hlsl")
                            .Build<SsrPipeline>(std::move(pso_full_screen_info));
     }
 
     [[nodiscard]] RecordParameters Prepare(
-        const RasterContext& context,
         const RasterConfig& ui_config,
         const Camera&       camera,
-        TextureWithHandle   input_image
+        Extent2D            extent
     ) const {
         RecordParameters parameters{};
         parameters.enabled  = ui_config.ssr_is_ssr_enabled != 0;
-        parameters.bindless = context.bdls;
-        parameters.input    = std::move(input_image);
-        parameters.output = parameters.enabled ? context.textures.ssr_output : parameters.input;
         if (!parameters.enabled) {
             return parameters;
         }
@@ -85,7 +83,7 @@ public:
         param.world2clip                     = Transpose(camera.GetViewProjectionMatrix());
         param.camera_position                = camera.GetPosition();
         param.near_clip                      = camera.GetNearClip();
-        param.resolution                     = float2(parameters.output.GetSize());
+        param.resolution                     = float2(extent.x, extent.y);
         param.far_clip                       = camera.GetFarClip();
         param.ssr_roughness_threshold        = ui_config.ssr_roughness_threshold;
         param.ssr_metallic_threshold         = ui_config.ssr_metallic_threshold;
@@ -93,10 +91,6 @@ public:
         param.ssr_sample_count               = ui_config.ssr_sample_count;
         param.ssr_is_enable_jitter           = ui_config.ssr_is_enable_jitter;
         param.ssr_is_force_ground_enable_ssr = ui_config.ssr_is_force_ground_enable_ssr;
-        param.color_tex                      = parameters.input.hdl;
-        param.normal_tex                     = context.textures.normal.hdl;
-        param.depth_tex                      = context.textures.depth_linear_sampler.hdl;
-        param.gbuffer_metal_rough_ao         = context.textures.metal_rough_ao.hdl;
         return parameters;
     }
 
@@ -113,12 +107,11 @@ public:
             );
     }
 
-    void AddToGraph(
+    RENDER_API void AddToGraph(
         RenderGraph& graph,
-        const RasterContext& context,
         const RasterConfig& ui_config,
         const Camera& camera,
-        TextureWithHandle input_image,
+        Extent2D extent,
         GraphResources resources
     );
 

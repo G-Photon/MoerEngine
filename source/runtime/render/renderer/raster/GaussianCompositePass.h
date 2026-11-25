@@ -6,6 +6,8 @@
 namespace Moer::Render::Raster {
 class RENDER_API GaussianCompositePass {
 public:
+    static constexpr EPixelFormat OutputFormat = PF_R32G32B32A32_SFLOAT;
+
     struct RecordParameters {
         TextureWithHandle    input{}, output{};
         TextureRef           color{}, transmittance{};

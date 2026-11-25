@@ -22,7 +22,8 @@ using namespace Moer::Render;
 using namespace Moer::Render::Raster;
 
 void RunDisplayTransientContracts();
-int RunDisplayTransientScene(int argc, const char** argv);
+void RunEffectsTransientContracts();
+int RunDisplayTransientScene(int argc, const char** argv, bool effects);
 
 namespace {
 
@@ -427,7 +428,8 @@ int SceneSmoke(int argc, const char** argv) {
 
 int main(int argc, const char** argv) {
     if (argc > 1 && std::string_view(argv[1]) == "--scene") return SceneSmoke(argc, argv);
-    if (argc > 1 && std::string_view(argv[1]) == "--display-scene") return RunDisplayTransientScene(argc, argv);
+    if (argc > 1 && std::string_view(argv[1]) == "--display-scene") return RunDisplayTransientScene(argc, argv, false);
+    if (argc > 1 && std::string_view(argv[1]) == "--effects-scene") return RunDisplayTransientScene(argc, argv, true);
     bool device_ready = false, tasks_ready = false;
     try {
         LogSystem::Init();
@@ -438,6 +440,8 @@ int main(int argc, const char** argv) {
         device_ready = true;
         if (argc > 1 && std::string_view(argv[1]) == "--display") {
             RunDisplayTransientContracts();
+        } else if (argc > 1 && std::string_view(argv[1]) == "--effects") {
+            RunEffectsTransientContracts();
         } else {
             Numeric();
             TonemappingTransient();
