@@ -232,7 +232,7 @@ set_target_properties(TestShaderEffectsSmoke PROPERTIES FOLDER ${moer_test_folde
 # Opt in: requires a Vulkan ray-tracing GPU and the configured scene assets.
 option(MOER_SHADER_GPU_TESTS "Register shader effect rendering smoke tests" OFF)
 if (NOT APPLE)
-    add_executable(TestAaTransient "AaTransientTest.cpp"
+    add_executable(TestAaTransient "AaTransientTest.cpp" "DisplayTransientTest.cpp"
         "${moer_source_dir}/runtime/render/scene/camera/Camera.cpp")
     target_link_libraries(TestAaTransient PRIVATE Moer::Runtime)
     set_target_properties(TestAaTransient PROPERTIES FOLDER ${moer_test_folder})
@@ -242,6 +242,12 @@ if (NOT APPLE)
             WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 180 LABELS "gpu;shader" RESOURCE_LOCK shader_gpu)
         add_test(NAME AaTransientScene COMMAND $<TARGET_FILE:TestAaTransient> --scene)
         set_tests_properties(AaTransientScene PROPERTIES
+            WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 180 LABELS "gpu;shader;scene" RESOURCE_LOCK shader_gpu)
+        add_test(NAME DisplayTransientContract COMMAND $<TARGET_FILE:TestAaTransient> --display)
+        set_tests_properties(DisplayTransientContract PROPERTIES
+            WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 180 LABELS "gpu;shader" RESOURCE_LOCK shader_gpu)
+        add_test(NAME DisplayTransientScene COMMAND $<TARGET_FILE:TestAaTransient> --display-scene)
+        set_tests_properties(DisplayTransientScene PROPERTIES
             WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 180 LABELS "gpu;shader;scene" RESOURCE_LOCK shader_gpu)
     endif()
 endif()

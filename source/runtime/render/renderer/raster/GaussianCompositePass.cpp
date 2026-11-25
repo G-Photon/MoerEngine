@@ -193,7 +193,8 @@ void GaussianCompositePass::RecordDebug(
     TextureRef              output
 ) {
     GaussianDispatchParams param{};
-    const auto             size = parameters.output.GetSize();
+    const TextureWithHandle target{.tex = output};
+    const auto             size = target.GetSize();
     param.info                  = uint4(size.x, size.y, (size.x + 15) / 16, 0);
     param.job = uint4(uint(parameters.debug_view), uint(parameters.is_shadow_depth_valid), 0, 0);
     commands
@@ -207,7 +208,7 @@ void GaussianCompositePass::RecordDebug(
         )
         .Draw(
             "Gaussian debug view",
-            parameters.output.GetRect2D(),
+            target.GetRect2D(),
             RasterTool::GetFullScreenDrawDatas(),
             ColorAttachment(output)
         );

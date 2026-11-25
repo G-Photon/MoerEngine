@@ -85,6 +85,11 @@ void WritePng(const std::filesystem::path& path, uint2 resolution, const Readbac
 void GaussianImageExport::Reject(uint64 request_id, std::string message) {
     m_status = {request_id, false, false, std::move(message)};
 }
+bool GaussianImageExport::RejectIfBusy(uint64 request_id) {
+    if (!m_status.is_busy && !m_image_readback.Valid() && !m_write.valid()) return false;
+    m_status = {request_id, true, false, "PNG request rejected: previous export is still running"};
+    return true;
+}
 void GaussianImageExport::Request(
     CommandList&                 commands,
     TextureView                  display,
@@ -106,10 +111,29 @@ RenderGraph::PassHandle GaussianImageExport::AddToGraph(
     const std::filesystem::path& path,
     uint64                       request_id
 ) {
-    if (m_status.is_busy || m_image_readback.Valid() || m_write.valid()) {
-        m_status = {request_id, true, false, "PNG request rejected: previous export is still running"};
+    if (RejectIfBusy(request_id)) return {};
+    if (!display.GetTexture() || display.num_mips != 1 || display.num_array != 1 ||
+        display.extent.x != resolution.x || display.extent.y != resolution.y) {
+        Reject(request_id, "PNG source must be one image matching the captured frame resolution");
         return {};
     }
+    return AddToGraph(graph, GraphImage{
+        .resource = ImportRasterTexture(graph, "GaussianExport.source", display.GetTexture()),
+        .format = display.GetTexture()->GetFormat(),
+        .mip_level = display.mip_level,
+        .array_layer = display.array_layer
+    }, frame_status, resolution, path, request_id);
+}
+
+RenderGraph::PassHandle GaussianImageExport::AddToGraph(
+    RenderGraph&                 graph,
+    GraphImage                   display,
+    BufferView                   frame_status,
+    uint2                        resolution,
+    const std::filesystem::path& path,
+    uint64                       request_id
+) {
+    if (RejectIfBusy(request_id)) return {};
     auto extension = path.extension().string();
     std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
         return char(std::tolower(c));
@@ -118,11 +142,11 @@ RenderGraph::PassHandle GaussianImageExport::AddToGraph(
         Reject(request_id, "PNG export requires a .png filename");
         return {};
     }
-    if (display.GetTexture()->GetWidth() != resolution.x || display.GetTexture()->GetHeight() != resolution.y) {
-        Reject(request_id, "PNG source resolution does not match the captured frame");
+    if (!display.resource.IsValid() || !frame_status.GetBuffer() || !resolution.x || !resolution.y) {
+        Reject(request_id, "PNG export requires a valid image, status and nonzero resolution");
         return {};
     }
-    const auto format = display.GetTexture()->GetFormat();
+    const auto format = display.format;
     if (format != PF_R32G32B32A32_SFLOAT && format != PF_R8G8B8A8_UNORM) {
         Reject(request_id, "PNG export requires a linear float32 or linear RGBA8 image");
         return {};
@@ -134,7 +158,7 @@ RenderGraph::PassHandle GaussianImageExport::AddToGraph(
 
     // The snapshot is private to this request. Its first copy establishes its
     // layout; the public source and status return to the raster graph boundary.
-    const auto source = ImportRasterTexture(graph, "GaussianExport.source", display.GetTexture());
+    const auto source = display.resource;
     const auto status = ImportRasterBuffer(graph, "GaussianExport.status", frame_status.GetBuffer());
     const auto image = graph.CreateTransientTexture("GaussianExport.snapshot", RGTransientTextureDesc{
         .extent = Extent3D(resolution.x, resolution.y, 1),
@@ -142,8 +166,8 @@ RenderGraph::PassHandle GaussianImageExport::AddToGraph(
         .usage = ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST,
     });
     const RenderGraph::TextureRange source_range{
-        .mip_first = display.mip_level, .mip_count = display.num_mips,
-        .layer_first = display.array_layer, .layer_count = display.num_array
+        .mip_first = display.mip_level, .mip_count = 1,
+        .layer_first = display.array_layer, .layer_count = 1
     };
     graph.AddRecordPass(
         "GaussianExport.Snapshot",
@@ -152,8 +176,19 @@ RenderGraph::PassHandle GaussianImageExport::AddToGraph(
                 .Read(source, RenderGraph::TextureAccessType::TransferSource, source_range)
                 .Write(image, RenderGraph::TextureAccessType::TransferDestination);
         },
-        [&graph, display, image](CommandList& commands) {
-            commands.CopyFrom(display, graph.GetPhysicalTexture(image)->GetView());
+        [this, &graph, display, image, resolution, request_id](CommandList& commands) {
+            const auto texture = graph.GetPhysicalTexture(display.resource);
+            if (!texture || texture->GetFormat() != display.format ||
+                display.mip_level >= texture->GetNumMips() || display.array_layer >= texture->GetNumArray()) {
+                Reject(request_id, "PNG graph source does not match its declared format or subresource");
+                throw std::invalid_argument(m_status.message);
+            }
+            const auto view = texture->GetView(display.mip_level, 1).Slice(display.array_layer, 1);
+            if (view.extent.x != resolution.x || view.extent.y != resolution.y || view.extent.z != 1) {
+                Reject(request_id, "PNG graph source resolution does not match the captured frame");
+                throw std::invalid_argument(m_status.message);
+            }
+            commands.CopyFrom(view, graph.GetPhysicalTexture(image)->GetView());
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
     );

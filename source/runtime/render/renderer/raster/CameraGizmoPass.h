@@ -31,7 +31,7 @@ public:
             RHIRasterizeInfo::Preset(),
             {},
             {RHIColorAttachmentInfo::Preset<Blend::ALPHA_BLEND>(
-                context.textures.tonemapping_output.tex->GetFormat()
+                RasterTextures::TonemappingOutputFormat
             )},
             RHIDepthStencilStateInfo::Preset(),
             PF_UNDEFINED,
@@ -45,7 +45,6 @@ public:
     }
 
     [[nodiscard]] RecordParameters Prepare(
-        const RasterContext& context,
         const Camera&        scene_camera,
         const Camera&        main_camera
     ) const {
@@ -69,7 +68,6 @@ public:
             float4(up.x, up.y, up.z, main_camera.GetAspectRatio());
         param.camera_front_far =
             float4(front.x, front.y, front.z, Max(far_depth, near_depth * 2.0f));
-        parameters.output = context.textures.tonemapping_output;
         return parameters;
     }
 
@@ -95,8 +93,9 @@ public:
         GraphResources resources
     );
 
-    void Process(RasterContext& context, const Camera& scene_camera, const Camera& main_camera) {
-        const RecordParameters parameters = Prepare(context, scene_camera, main_camera);
+    void Process(RasterContext& context, const Camera& scene_camera, const Camera& main_camera, TextureRef output) {
+        auto parameters = Prepare(scene_camera, main_camera);
+        parameters.output.tex = std::move(output);
         Record(context.cmd_list, parameters);
     }
 

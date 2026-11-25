@@ -1184,7 +1184,15 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 graph_resources.tonemapping_exposure =
                     ImportRasterBuffer(graph, "tonemapping_exposure", tonemapping_exposure.Get());
                 graph_resources.tonemapping_output =
-                    import_texture("tonemapping_output", raster_context.textures.tonemapping_output.tex);
+                    graph.CreateTransientTexture("tonemapping_output", RGTransientTextureDesc{
+                        .extent = Extent3D(scene_resolution.x, scene_resolution.y, 1),
+                        .format = RasterTextures::TonemappingOutputFormat,
+                        .usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT |
+                                 ETextureUsageFlags::TRANSFER_SRC
+                    });
+                if (selected_framebuffer_name == "tonemapping_output") {
+                    graph_resources.selected_framebuffer = graph_resources.tonemapping_output;
+                }
                 if (frame_packet.ui_composition.enabled && selected_framebuffer_view.GetTexture()) {
                     graph_resources.selected_framebuffer = import_physical_texture(
                         "selected_framebuffer", selected_framebuffer_view.GetTexture()
@@ -1198,8 +1206,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         expected_validation_resource = graph_resources.normal;
                     } else if (validation_name == "depth_linear_sampler") {
                         expected_validation_resource = graph_resources.depth;
-                    } else if (validation_name == "tonemapping_output") {
-                        expected_validation_resource = graph_resources.tonemapping_output;
                     }
                     if (expected_validation_resource.IsValid() &&
                         graph_resources.selected_framebuffer != expected_validation_resource) {
@@ -1517,19 +1523,17 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                      .exposure           = graph_resources.tonemapping_exposure,
                      .tonemapping_output = graph_resources.tonemapping_output}
                 );
-                processing_image          = raster_context.textures.tonemapping_output;
                 processing_image_resource = graph_resources.tonemapping_output;
 
                 if (record_gaussians &&
                     frame_packet.gaussian_view_settings.debug_view != EGaussianDebugView::Color) {
-                    auto debug = m_gaussian_composite_pass->Prepare(
-                        processing_image,
-                        m_gaussian_splat_pass->GetColor(),
-                        m_gaussian_splat_pass->GetTransmittance(),
-                        BufferRef(m_gaussian_splat_pass->GetStatusBuffer().GetBuffer()),
-                        m_gaussian_splat_pass->GetRanges(),
-                        frame_packet.gaussian_view_settings.debug_view
-                    );
+                    GaussianCompositePass::RecordParameters debug{
+                        .color = m_gaussian_splat_pass->GetColor(),
+                        .transmittance = m_gaussian_splat_pass->GetTransmittance(),
+                        .status = BufferRef(m_gaussian_splat_pass->GetStatusBuffer().GetBuffer()),
+                        .ranges = m_gaussian_splat_pass->GetRanges(),
+                        .debug_view = frame_packet.gaussian_view_settings.debug_view
+                    };
                     auto debug_color = gaussian_graph.color;
                     if (debug.debug_view == EGaussianDebugView::ShadowDepth && shadow_depth_handle.parameters) {
                         auto atlas = shadow_depth_pass->AddGaussianDepthDebugToGraph(
@@ -1551,11 +1555,11 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                                 .Read(gaussian_graph.ranges, RenderGraph::BufferAccessType::ShaderRead)
                                 .Write(graph_resources.tonemapping_output, RenderGraph::TextureAccessType::ColorAttachment);
                         },
-                        [&, debug](CommandList& commands) {
+                        [&, debug, graph_resources](CommandList& commands) {
                             m_gaussian_composite_pass->RecordDebug(
                                 commands,
                                 debug,
-                                raster_context.textures.tonemapping_output.tex
+                                graph.GetPhysicalTexture(graph_resources.tonemapping_output)
                             );
                         },
                         RenderGraph::PassRecordPolicy::ParallelAllowed
@@ -1569,8 +1573,13 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         m_gaussian_export->Reject(request.request_id,
                             "Reference PNG requires a pure Gaussian view; select Viewport PNG for mixed scenes");
                     } else {
-                        const auto image = reference ? m_gaussian_splat_pass->GetDisplay()->GetView() :
-                                                       raster_context.textures.tonemapping_output.tex->GetView();
+                        const auto image = reference ? GaussianImageExport::GraphImage{
+                            .resource = ImportRasterTexture(graph, "GaussianExport.reference", m_gaussian_splat_pass->GetDisplay().Get()),
+                            .format = PF_R32G32B32A32_SFLOAT
+                        } : GaussianImageExport::GraphImage{
+                            .resource = graph_resources.tonemapping_output,
+                            .format = RasterTextures::TonemappingOutputFormat
+                        };
                         m_gaussian_export->AddToGraph(
                             graph, image, m_gaussian_splat_pass->GetStatusBuffer(),
                             raster_context.GetResolution(), request.path, request.request_id

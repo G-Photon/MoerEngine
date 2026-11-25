@@ -38,7 +38,7 @@ namespace Moer::Render::Raster {
     X(TexHandle, aa_texture_3, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))     \
     X(TexHandle, aa_texture_4, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))     \
     X(TexHandle, aa_output, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR).GraphTransient()) \
-    X(TexHandle, tonemapping_output, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_UNORM).Usage(E_SAMPLED_COLOR))    \
+    X(TexHandle, tonemapping_output, Tex2DTag, TexConfig::Default(TonemappingOutputFormat).Usage(E_SAMPLED_COLOR).GraphTransient()) \
     X(TexHandle,                                                                                                \
       output,                                                                                                   \
       Tex2DTag,                                                                                                 \
@@ -119,6 +119,7 @@ namespace Moer::Render::Raster {
           .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS))
 
 struct RasterTextures {
+    static constexpr EPixelFormat TonemappingOutputFormat = PF_R8G8B8A8_UNORM;
     // Full-resolution textures
 #define X(TYPE, NAME, TEXTYPE, CONFIG) TYPE NAME;
     RASTER_TEXTURES_TABLE

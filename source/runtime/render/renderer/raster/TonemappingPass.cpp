@@ -8,7 +8,7 @@
 namespace Moer::Render::Raster {
 
 TonemappingPass::TonemappingPass(RasterContext& context) :
-    TonemappingPass(context.device, context.manager, context.textures.tonemapping_output.tex->GetFormat()) {}
+    TonemappingPass(context.device, context.manager, RasterTextures::TonemappingOutputFormat) {}
 
 TonemappingPass::TonemappingPass(RenderDevice& device, ShaderManager& manager, EPixelFormat output_format) {
     GfxPsoCreateInfo pso_full_screen_info(

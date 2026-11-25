@@ -1126,8 +1126,8 @@ void CameraGizmoPass::AddToGraph(
     auto prepared = graph.AddSetupPass(
         "CameraGizmo.Prepare",
         uint8{0},
-        [this, &context, &scene_camera, &main_camera](const uint8&) {
-            return Prepare(context, scene_camera, main_camera);
+        [this, &scene_camera, &main_camera](const uint8&) {
+            return Prepare(scene_camera, main_camera);
         }
     );
     if (!prepared.IsValid()) {
@@ -1140,9 +1140,11 @@ void CameraGizmoPass::AddToGraph(
             builder.ReadWrite(resources.tonemapping_output, RenderGraph::TextureAccessType::ColorAttachment)
                 .SideEffect();
         },
-        [this, prepared](CommandList& cmd_list) {
+        [this, &graph, resources, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "CameraGizmo", [&] {
-                Record(cmd_list, prepared.Get());
+                auto parameters = prepared.Get();
+                parameters.output.tex = graph.GetPhysicalTexture(resources.tonemapping_output);
+                Record(cmd_list, parameters);
             });
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
@@ -1192,9 +1194,11 @@ void CsmGizmoPass::AddToGraph(
                 .ReadWrite(resources.tonemapping_output, RenderGraph::TextureAccessType::ColorAttachment)
                 .SideEffect();
         },
-        [this, prepared](CommandList& cmd_list) {
+        [this, &graph, resources, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "CsmGizmo", [&] {
-                RecordDraw(cmd_list, prepared.Get());
+                auto parameters = prepared.Get();
+                parameters.output.tex = graph.GetPhysicalTexture(resources.tonemapping_output);
+                RecordDraw(cmd_list, parameters);
             });
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed

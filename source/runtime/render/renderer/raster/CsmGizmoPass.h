@@ -46,7 +46,7 @@ public:
             RHIRasterizeInfo::Preset(),
             {},
             {RHIColorAttachmentInfo::Preset<Blend::ALPHA_BLEND>(
-                context.textures.tonemapping_output.tex->GetFormat()
+                RasterTextures::TonemappingOutputFormat
             )},
             RHIDepthStencilStateInfo::Preset(),
             PF_UNDEFINED,
@@ -141,7 +141,6 @@ public:
         parameters.bindless       = context.bdls;
         parameters.cascade_buffer = m_cascade_data_buffer;
         parameters.cascade_count  = valid_cascade_count;
-        parameters.output         = context.textures.tonemapping_output;
         return parameters;
     }
 
@@ -200,10 +199,12 @@ public:
         const RasterConfig&         raster_config,
         const SceneViewGizmoConfig& gizmo_config,
         const Camera&               scene_camera,
-        const Camera&               main_camera
+        const Camera&               main_camera,
+        TextureRef                  output
     ) {
-        const RecordParameters parameters =
+        auto parameters =
             Prepare(context, raster_config, gizmo_config, scene_camera, main_camera);
+        parameters.output.tex = std::move(output);
         Record(context.cmd_list, parameters);
     }
 

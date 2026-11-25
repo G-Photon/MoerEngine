@@ -8,6 +8,13 @@ namespace Moer::Render::Raster {
 // Read back the image and its capacity flag from the same GPU frame, then encode off-thread.
 class RENDER_API GaussianImageExport {
 public:
+    struct GraphImage {
+        RenderGraph::TextureHandle resource{};
+        EPixelFormat format = PF_UNDEFINED;
+        uint8 mip_level = 0;
+        uint8 array_layer = 0;
+    };
+
     void Request(
         CommandList&                 commands,
         TextureView                  linear_display,
@@ -24,6 +31,14 @@ public:
         const std::filesystem::path& path,
         uint64                       request_id
     );
+    RenderGraph::PassHandle AddToGraph(
+        RenderGraph&                 graph,
+        GraphImage                   linear_display,
+        BufferView                   frame_status,
+        uint2                        resolution,
+        const std::filesystem::path& path,
+        uint64                       request_id
+    );
     void                        Reject(uint64 request_id, std::string message);
     void                        Poll();
     void                        Finish(); // Only for teardown after the renderer has drained GPU submissions.
@@ -32,6 +47,8 @@ public:
     }
 
 private:
+    bool RejectIfBusy(uint64 request_id);
+
     struct WriteResult {
         bool        is_successful;
         std::string message;

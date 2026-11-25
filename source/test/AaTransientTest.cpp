@@ -21,6 +21,9 @@ using namespace Moer;
 using namespace Moer::Render;
 using namespace Moer::Render::Raster;
 
+void RunDisplayTransientContracts();
+int RunDisplayTransientScene(int argc, const char** argv);
+
 namespace {
 
 void Require(bool condition, const char* message) {
@@ -424,6 +427,7 @@ int SceneSmoke(int argc, const char** argv) {
 
 int main(int argc, const char** argv) {
     if (argc > 1 && std::string_view(argv[1]) == "--scene") return SceneSmoke(argc, argv);
+    if (argc > 1 && std::string_view(argv[1]) == "--display-scene") return RunDisplayTransientScene(argc, argv);
     bool device_ready = false, tasks_ready = false;
     try {
         LogSystem::Init();
@@ -432,8 +436,12 @@ int main(int argc, const char** argv) {
         tasks_ready = true;
         RenderDevice::Init(DeviceInitInfo{.rhi_type = ERHIType::Vulkan, .name = "AaTransientTest", .rhi_api_version = "1.3"});
         device_ready = true;
-        Numeric();
-        TonemappingTransient();
+        if (argc > 1 && std::string_view(argv[1]) == "--display") {
+            RunDisplayTransientContracts();
+        } else {
+            Numeric();
+            TonemappingTransient();
+        }
         ShaderManager::ShutDown();
         RenderDevice::Dispose();
         device_ready = false;
