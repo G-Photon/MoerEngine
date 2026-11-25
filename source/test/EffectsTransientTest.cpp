@@ -54,11 +54,11 @@ std::vector<float4> FilterReference(const std::vector<float4>& input, Extent2D s
 
 struct Scenario {
     bool denoise, composite, pattern, preview;
-    uint32 ssr; // 0: disabled; 1: material rejection; 2: reflection tracing.
+    uint32 ssr; // 0: disabled; 1: material rejection; 2: reflection tracing; 3: zero trace budget.
 };
 
 struct Statistics {
-    uint64 compared_values = 0, cpu_values = 0, reflected_values = 0;
+    uint64 compared_values = 0, cpu_values = 0, reflected_values = 0, missed_values = 0;
     float maximum_cpu_error = 0;
 };
 
@@ -76,12 +76,30 @@ std::vector<float> RunCase(BilateralFilterDenoiserPass& denoiser, SsrPass& ssr, 
     config.ssr_roughness_threshold = 1.f;
     config.ssr_is_enable_jitter = false;
     config.ssr_step_base = .15f;
-    config.ssr_sample_count = 16;
+    config.ssr_sample_count = scenario.ssr == 3 ? 0 : 16;
     Camera camera;
     camera.Initialize(float3(0.f), -90.f, 0.f, 60.f, float(size.x) / size.y, .01f, 100.f);
-    const auto projection = camera.GetProjectionMatrix();
-    const float depth_value = (-3.f * projection[2][2] + projection[2][3]) /
-        (-3.f * projection[3][2] + projection[3][3]);
+    const auto world_to_clip = camera.GetViewProjectionMatrix();
+    const auto clip_to_world = camera.GetViewProjectionMatrixInv();
+    const float3 receiver_normal(std::sqrt(.91f), 0.f, .3f);
+    std::vector<float> depths(size.x * size.y);
+    std::vector<float4> normals(depths.size());
+    for (uint32 y = 0; y < size.y; ++y) for (uint32 x = 0; x < size.x; ++x) {
+        const float2 uv((x + .5f) / size.x, (y + .5f) / size.y);
+        const auto far_point = clip_to_world * float4(uv.x * 2.f - 1.f, 1.f - uv.y * 2.f, 0.f, 1.f);
+        const auto ray = Normalizef(float3(far_point.x, far_point.y, far_point.z) / far_point.w);
+        const bool receiver = uv.x < .5f;
+        // The receiver passes through (0,0,-3); the background plane is z=-5.
+        // A constant-depth surface with an upward normal only exercises false self-hits.
+        const float distance = receiver ? -.9f / Dot(receiver_normal, ray) : -5.f / ray.z;
+        const auto position = ray * distance;
+        const auto clip = world_to_clip * float4(position.x, position.y, position.z, 1.f);
+        const auto normal = receiver ? receiver_normal : float3(0.f, 0.f, 1.f);
+        depths[y * size.x + x] = clip.z / clip.w;
+        normals[y * size.x + x] = float4(normal.x * .5f + .5f, normal.y * .5f + .5f, normal.z * .5f + .5f, 1.f);
+        Require(distance > 0.f && depths[y * size.x + x] > 0.f && depths[y * size.x + x] < 1.f,
+            "SSR fixture surface is outside the camera frustum");
+    }
     const auto normal_texture = device.CreateTexture("Effects.normal", size, PF_R32G32B32A32_SFLOAT, usage);
     const auto material_texture = device.CreateTexture("Effects.material", size, PF_R32G32B32A32_SFLOAT, usage);
     const auto depth_texture = device.CreateTexture("Effects.depth", size, PF_R32_SFLOAT, usage);
@@ -96,6 +114,7 @@ std::vector<float> RunCase(BilateralFilterDenoiserPass& denoiser, SsrPass& ssr, 
     RenderGraphResourcePool pool(100);
     RenderGraphTransientAllocator allocator(pool);
     std::vector<float> snapshot;
+    const auto reflected_before = statistics.reflected_values;
     uint32 first_frame_allocations = 0;
     for (uint32 frame = 0; frame < 2; ++frame) {
         std::vector<float4> input(size.x * size.y);
@@ -138,9 +157,9 @@ std::vector<float> RunCase(BilateralFilterDenoiserPass& denoiser, SsrPass& ssr, 
                     .Write(ranges_handle, RenderGraph::BufferAccessType::TransferDestination);
             }, [&, source](CommandList& commands) {
                 commands.CopyFrom(std::as_bytes(std::span(input)), graph.GetPhysicalTexture(source)->GetView());
-                commands.ClearResource(normal_texture->GetView(), float4(.5f, 1.f, .5f, 1.f));
+                commands.CopyFrom(std::as_bytes(std::span(normals)), normal_texture->GetView());
                 commands.ClearResource(material_texture->GetView(), float4(1.f, .2f, 0.f, 1.f));
-                commands.ClearResource(depth_texture->GetView(), float4(depth_value));
+                commands.CopyFrom(std::as_bytes(std::span(depths)), depth_texture->GetView());
                 commands.ClearResource(gaussian_color->GetView(), float4(.375f, .1f, .05f, .5f));
                 commands.ClearResource(transmittance->GetView(), float4(.5f));
                 commands.ClearResource(status->GetView(), 0u);
@@ -217,11 +236,13 @@ std::vector<float> RunCase(BilateralFilterDenoiserPass& denoiser, SsrPass& ssr, 
                 const double linear = srgb <= .04045 ? srgb / 12.92 : std::pow((srgb + .055) / 1.055, 2.4);
                 expected = float(linear + .5 * expected);
             }
-            if (scenario.ssr != 2) {
+            const bool background = (float(pixel % size.x) + .5f) / size.x >= .5f;
+            if (scenario.ssr != 2 || background) {
                 const auto error = std::abs((*values)[index] - expected);
                 Require(error < 5e-5f, "Effects output differs from independent CPU filtering/compositing reference");
                 statistics.maximum_cpu_error = std::max(statistics.maximum_cpu_error, error);
                 ++statistics.cpu_values;
+                if (scenario.ssr == 3 || (scenario.ssr == 2 && background)) ++statistics.missed_values;
             } else if (scenario.pattern && std::abs((*values)[index] - expected) > 5e-4f) ++statistics.reflected_values;
             if (preview) Require(preview->size() == values->size() && std::abs((*preview)[index] - filtered[pixel][channel]) < 5e-5f,
                 "Denoiser preview was corrupted after subsequent passes");
@@ -231,6 +252,8 @@ std::vector<float> RunCase(BilateralFilterDenoiserPass& denoiser, SsrPass& ssr, 
         if (frame == 0) first_frame_allocations = pool.TextureCount();
         else Require(pool.TextureCount() == first_frame_allocations, "Second frame did not reuse completed allocations");
     }
+    if (!discard && size.x == 32 && scenario.pattern && scenario.ssr == 2)
+        Require(statistics.reflected_values > reflected_before, "SSR receiver produced no reflected pixels in this mode");
     Require(!composite.GetOutput().tex, "Graph composite created a persistent standalone output");
     LOG_INFO("[TESTCASE][PASS] name=EffectsTransient size={}x{} denoise={} ssr={} composite={} pattern={} preview={} pooled={} parallel={} discard={}",
         size.x, size.y, scenario.denoise, scenario.ssr, scenario.composite, scenario.pattern, scenario.preview, pooled, parallel, discard);
@@ -261,7 +284,16 @@ void RunEffectsTransientContracts() {
         }
     }
     Require(statistics.reflected_values > 0, "SSR tracing fixture never changed any pixel");
+    const Scenario miss{true, true, true, true, 3};
+    const auto baseline = RunCase(denoiser, ssr, composite, Extent2D(32, 18), miss, false, false, statistics);
+    ++runs;
+    for (const auto mode : {std::pair{false, true}, std::pair{true, false}, std::pair{true, true}}) {
+        const auto values = RunCase(denoiser, ssr, composite, Extent2D(32, 18), miss, mode.first, mode.second, statistics);
+        Require(values == baseline, "Allocation or recording mode changed a zero-budget SSR miss");
+        statistics.compared_values += values.size();
+        ++runs;
+    }
     RunCase(denoiser, ssr, composite, Extent2D(17, 9), {true, true, true, false, 2}, true, true, statistics, true);
-    LOG_INFO("[TESTCASE][PASS] EffectsTransient numeric: runs={} frames={} compared_values={} cpu_values={} maximum_cpu_error={} reflected_values={}; discarded recording released",
-        runs, runs * 2, statistics.compared_values, statistics.cpu_values, statistics.maximum_cpu_error, statistics.reflected_values);
+    LOG_INFO("[TESTCASE][PASS] EffectsTransient numeric: runs={} frames={} compared_values={} cpu_values={} maximum_cpu_error={} reflected_values={} missed_values={}; discarded recording released",
+        runs, runs * 2, statistics.compared_values, statistics.cpu_values, statistics.maximum_cpu_error, statistics.reflected_values, statistics.missed_values);
 }
