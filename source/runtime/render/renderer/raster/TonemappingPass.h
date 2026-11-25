@@ -76,12 +76,11 @@ public:
     TonemappingPass(RenderDevice& device, ShaderManager& manager, EPixelFormat output_format);
 
     [[nodiscard]] RecordParameters Prepare(
-        const RasterContext& context, const RasterConfig& config,
-        TextureWithHandle input_image, float frame_time
+        const RasterConfig& config, Extent2D input_extent, float frame_time
     ) const;
     void AddToGraph(
-        RenderGraph& graph, const RasterContext& context, const RasterConfig& config,
-        TextureWithHandle input_image, float frame_time, GraphResources resources
+        RenderGraph& graph, const RasterConfig& config,
+        Extent2D input_extent, float frame_time, GraphResources resources
     );
     // The histogram handle can extend its graph lifetime for diagnostic readback;
     // its physical allocation never escapes the declaring record callbacks.

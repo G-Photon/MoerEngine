@@ -39,15 +39,12 @@ TonemappingPass::TonemappingPass(RenderDevice& device, ShaderManager& manager, E
 }
 
 TonemappingPass::RecordParameters TonemappingPass::Prepare(
-    const RasterContext& context, const RasterConfig& ui_config,
-    TextureWithHandle input_image, float frame_time
+    const RasterConfig& ui_config, Extent2D input_extent, float frame_time
 ) const {
     RecordParameters parameters{};
-    parameters.input     = std::move(input_image);
-    parameters.output    = context.textures.tonemapping_output;
     parameters.exposure  = exposure_buffer;
 
-    const uint2 input_res = parameters.input.GetSize();
+    const uint2 input_res(input_extent.x, input_extent.y);
     auto&       param     = parameters.shader;
     {
         auto& ae  = param.ae;
@@ -98,14 +95,14 @@ TonemappingPass::RecordParameters TonemappingPass::Prepare(
 }
 
 void TonemappingPass::AddToGraph(
-    RenderGraph& graph, const RasterContext& context, const RasterConfig& config,
-    TextureWithHandle input_image, float frame_time, GraphResources resources
+    RenderGraph& graph, const RasterConfig& config,
+    Extent2D input_extent, float frame_time, GraphResources resources
 ) {
     MOER_PROFILE_SCOPE("Raster.AddToGraph.TonemappingPass");
     auto prepared = graph.AddSetupPass(
-        "Tonemapping.Prepare", std::move(input_image),
-        [this, &context, &config, frame_time](const TextureWithHandle& input) {
-            return Prepare(context, config, input, frame_time);
+        "Tonemapping.Prepare", input_extent,
+        [this, &config, frame_time](Extent2D extent) {
+            return Prepare(config, extent, frame_time);
         }
     );
     if (prepared.IsValid()) static_cast<void>(AddRecordPasses(graph, resources, prepared));
@@ -139,9 +136,11 @@ TonemappingPass::GraphResult TonemappingPass::AddRecordPasses(
                 .Read(resources.input, RenderGraph::TextureAccessType::Sampled)
                 .ReadWrite(histogram, RenderGraph::BufferAccessType::Storage);
         },
-        [this, &graph, histogram, prepared](CommandList& commands) {
+        [this, &graph, resources, histogram, prepared](CommandList& commands) {
             ScopedGpuMarker marker(commands, "Pass: Tonemapping.BuildHistogram", GpuMarkerPalette::Pass());
-            RecordHistogram(commands, prepared.Get(), graph.GetPhysicalBuffer(histogram)->GetView());
+            auto parameters = prepared.Get();
+            parameters.input.tex = graph.GetPhysicalTexture(resources.input);
+            RecordHistogram(commands, parameters, graph.GetPhysicalBuffer(histogram)->GetView());
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
     );
@@ -167,9 +166,12 @@ TonemappingPass::GraphResult TonemappingPass::AddRecordPasses(
                 .Read(resources.exposure, RenderGraph::BufferAccessType::ShaderRead)
                 .Write(resources.tonemapping_output, RenderGraph::TextureAccessType::ColorAttachment);
         },
-        [this, &graph, histogram, prepared](CommandList& commands) {
+        [this, &graph, resources, histogram, prepared](CommandList& commands) {
             ScopedGpuMarker marker(commands, "Pass: Tonemapping.Apply", GpuMarkerPalette::Pass());
-            RecordTonemapping(commands, prepared.Get(), graph.GetPhysicalBuffer(histogram)->GetView());
+            auto parameters = prepared.Get();
+            parameters.input.tex = graph.GetPhysicalTexture(resources.input);
+            parameters.output.tex = graph.GetPhysicalTexture(resources.tonemapping_output);
+            RecordTonemapping(commands, parameters, graph.GetPhysicalBuffer(histogram)->GetView());
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
     );

@@ -132,7 +132,8 @@ public:
     };
 
     struct FrameTextures {
-        TextureRef input{}, output{}, depth{};
+        Extent2D extent{};
+        TextureRef depth{};
         std::array<TextureRef, 2> history{};
     };
 
@@ -150,10 +151,11 @@ public:
     };
 
     AaPass(RasterContext& context) : AaPass(
-        context.device, context.manager, context.cmd_list, context.textures.aa_output.tex->GetFormat()
+        context.device, context.manager, context.cmd_list, PF_R16G16B16A16_SFLOAT
     ) {}
 
-    AaPass(RenderDevice& device, ShaderManager& manager, CommandList& uploads, EPixelFormat format) {
+    AaPass(RenderDevice& device, ShaderManager& manager, CommandList& uploads, EPixelFormat format) :
+        output_format(format) {
         const auto create_fullscreen_pipeline = [&]<typename Pipeline>(
                                                     Pipeline&        pipeline,
                                                     std::string_view vertex_path,
@@ -383,7 +385,6 @@ public:
         const RasterContext& context,
         const RasterConfig& ui_config,
         const Camera& camera,
-        TextureWithHandle input_image,
         uint8 smaa_phase,
         GraphResources resources,
         bool inspect_weights = false
@@ -406,6 +407,7 @@ public:
     }
 
 private:
+    EPixelFormat output_format;
     // smaa
     SmaaEdgeDetectionPipeline           smaa_edge_detection_pipeline;
     SmaaBlendingWeightPipeline          smaa_blending_weight_pipeline;

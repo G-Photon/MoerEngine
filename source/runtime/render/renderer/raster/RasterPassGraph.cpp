@@ -827,15 +827,13 @@ AaPass::GraphResult AaPass::AddToGraph(
     const RasterContext& context,
     const RasterConfig& ui_config,
     const Camera& camera,
-    TextureWithHandle input_image,
     uint8 smaa_phase,
     GraphResources resources,
     bool inspect_weights
 ) {
     MOER_PROFILE_SCOPE("Raster.AddToGraph.AaPass");
     return AddRecordPasses(graph, ui_config, camera, {
-        .input = input_image.tex,
-        .output = context.textures.aa_output.tex,
+        .extent = Extent2D(context.GetResolution()),
         .depth = context.textures.depth_linear_sampler.tex->CastToTextureRef(),
         .history = {context.textures.aa_texture_3.tex, context.textures.aa_texture_4.tex}
     }, smaa_phase, resources, inspect_weights);
@@ -850,8 +848,9 @@ AaPass::GraphResult AaPass::AddRecordPasses(
     GraphResources resources,
     bool inspect_weights
 ) {
-    if (!textures.input || !textures.output || smaa_phase > 1) {
-        throw std::invalid_argument("AA requires input/output textures and a valid temporal phase");
+    if (!textures.extent.x || !textures.extent.y || !resources.input.IsValid() ||
+        !resources.aa_output.IsValid() || smaa_phase > 1) {
+        throw std::invalid_argument("AA requires input/output handles, extent and a valid temporal phase");
     }
     if (ui_config.aa_mode == EAaMode::SMAA_T2X &&
         (!textures.depth || !textures.history[0] || !textures.history[1])) {
@@ -863,10 +862,10 @@ AaPass::GraphResult AaPass::AddRecordPasses(
     };
     const bool smaa = ui_config.aa_mode >= EAaMode::SMAA_1X;
     const bool temporal = ui_config.aa_mode == EAaMode::SMAA_T2X;
-    const auto extent = textures.input->GetExtent();
+    const auto extent = textures.extent;
     const RGTransientTextureDesc scratch_desc{
         .extent = Extent3D(extent.x, extent.y, 1),
-        .format = textures.output->GetFormat(),
+        .format = output_format,
         .usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT |
                  ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC
     };
@@ -880,7 +879,7 @@ AaPass::GraphResult AaPass::AddRecordPasses(
     graph.AddRecordPass(
         "AA.PublishBindings",
         [=](RenderGraph::PassBuilder& builder) { builder.Write(bindings_token); },
-        [this, &graph, &ui_config, &camera, textures, smaa_phase,
+        [this, &graph, &ui_config, &camera, textures, resources, smaa_phase,
          texture_1, texture_2, temporal, smaa, prepared](CommandList& commands) {
             FrameBindings bindings{};
             bindings.bindless = RenderDevice::Get().CreateBindlessArray(16);
@@ -890,8 +889,8 @@ AaPass::GraphResult AaPass::AddRecordPasses(
                 result.hdl = bindings.bindless->AllocateTexture(result.tex->GetView(), sampler);
                 return result;
             };
-            bindings.input = bind(textures.input);
-            bindings.output.tex = textures.output;
+            bindings.input = bind(graph.GetPhysicalTexture(resources.input));
+            bindings.output.tex = graph.GetPhysicalTexture(resources.aa_output);
             bindings.edges = bind(graph.GetPhysicalTexture(texture_1));
             if (smaa) {
                 bindings.weights = bind(graph.GetPhysicalTexture(texture_2));

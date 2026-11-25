@@ -962,6 +962,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         if (has_meshes) {
             raster_ao_frame = ao_pass->SelectFrameResources(raster_context, raster_config);
         }
+        const uint2 scene_resolution = raster_context.GetResolution();
         TextureWithHandle   processing_image = raster_context.textures.ao_output;
         RenderGraph::TextureHandle processing_image_resource{};
         TextureView         selected_framebuffer_view{};
@@ -1170,7 +1171,15 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 graph_resources.ssr_output =
                     import_texture("ssr_output", raster_context.textures.ssr_output.tex);
                 graph_resources.aa_output =
-                    import_texture("aa_output", raster_context.textures.aa_output.tex);
+                    graph.CreateTransientTexture("aa_output", RGTransientTextureDesc{
+                        .extent = Extent3D(scene_resolution.x, scene_resolution.y, 1),
+                        .format = PF_R16G16B16A16_SFLOAT,
+                        .usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT |
+                                 ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC
+                    });
+                if (selected_framebuffer_name == "aa_output") {
+                    graph_resources.selected_framebuffer = graph_resources.aa_output;
+                }
                 const auto& tonemapping_exposure = tonemapping_pass->GetExposureBuffer();
                 graph_resources.tonemapping_exposure =
                     ImportRasterBuffer(graph, "tonemapping_exposure", tonemapping_exposure.Get());
@@ -1481,7 +1490,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     raster_context,
                     raster_config,
                     camera,
-                    processing_image,
                     smaa_t2x_phase,
                     {.input     = processing_image_resource,
                      .depth     = graph_resources.depth,
@@ -1493,19 +1501,17 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 } else if (selected_framebuffer_name == "aa_texture_2") {
                     graph_resources.selected_framebuffer = aa_graph.weights;
                 }
-                processing_image          = raster_context.textures.aa_output;
                 processing_image_resource = graph_resources.aa_output;
                 bloom_pass->AddToGraph(
                     graph,
                     raster_config.bloom_enabled,
                     processing_image_resource,
-                    Extent2D(processing_image.GetSize())
+                    Extent2D(scene_resolution)
                 );
                 tonemapping_pass->AddToGraph(
                     graph,
-                    raster_context,
                     raster_config,
-                    processing_image,
+                    Extent2D(scene_resolution),
                     frame_time,
                     {.input              = processing_image_resource,
                      .exposure           = graph_resources.tonemapping_exposure,
