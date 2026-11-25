@@ -1,0 +1,396 @@
+{
+  "version": 1,
+  "groups": [
+    {
+      "name": "editor", "cpp_type": "Editor",
+      "fields": [
+        {"name": "width", "type": "uint32", "default": 1920},
+        {"name": "height", "type": "uint32", "default": 1080},
+        {"name": "fullscreen", "type": "bool", "default": false},
+        {"name": "vsync", "type": "bool", "default": false},
+        {"name": "lock_frame_rate", "type": "bool", "default": false},
+        {"name": "fps", "type": "uint32", "default": 60},
+        {"name": "max_fps", "type": "uint32", "default": 170},
+        {"name": "font_size", "type": "float", "default": 16.0, "template": 17.0},
+        {"name": "preset_imgui_config_path", "type": "string", "default": "./asset/preset_imgui.ini"}
+      ]
+    },
+    {
+      "name": "engine", "cpp_type": "Engine",
+      "groups": [
+        {
+          "name": "threading", "cpp_type": "Threading",
+          "fields": [
+            {"name": "render_thread", "type": "bool", "default": false},
+            {"name": "profile_logging", "type": "bool", "default": false},
+            {"name": "submission_batch_window", "type": "uint32", "default": 2,
+             "comment": "Bounded RHI overlap. Runtime clamps to [1, 8]; aliased native queues use 1."},
+            {"name": "max_frame_lag", "type": "uint32", "default": 0}
+          ]
+        },
+        {
+          "name": "profile_dump", "cpp_type": "ProfileDump",
+          "fields": [
+            {"name": "enabled", "type": "bool", "default": false,
+             "comment": "Start an Engine-owned capture session at startup; it can be stopped and restarted."},
+            {"name": "output_path", "type": "string", "default": "./profile/MoerProfile.mpd"},
+            {"name": "replace_existing", "type": "bool", "default": true,
+             "comment": "Replace the previous final capture only after the new capture closes successfully."}
+          ]
+        },
+        {
+          "name": "rhi", "cpp_type": "RHI",
+          "fields": [
+            {"name": "type", "type": "string", "default": "Not Specified", "template": "Vulkan",
+             "comment": "Supported backend names include Vulkan and D3D12."},
+            {"name": "api_version", "type": "string", "default": "1.3"},
+            {"name": "max_frame_in_flight", "type": "uint32", "default": 3}
+          ]
+        },
+        {
+          "name": "render", "cpp_type": "Render",
+          "fields": [
+            {"name": "default_render_method", "type": "string", "default": "Raster",
+             "comment": "Raster or Raytracing."}
+          ],
+          "groups": [
+            {
+              "name": "raster", "cpp_type": "Raster",
+              "comment": "RDG compilation is mandatory; parallel recording changes CPU scheduling only.",
+              "fields": [
+                {"name": "enable_shadow", "type": "bool", "default": true},
+                {"name": "low_quality_mode", "type": "bool", "default": false,
+                 "comment": "Use SSAO, fewer/smaller CSM cascades and simplified FXAA on lower-end GPUs."},
+                {"name": "render_graph_debug_dump", "type": "bool", "default": false},
+                {"name": "render_graph_parallel_recording", "type": "bool", "default": false}
+              ]
+            },
+            {
+              "name": "raytracing", "cpp_type": "Raytracing",
+              "fields": [
+                {"name": "render_graph_debug_dump", "type": "bool", "default": false},
+                {"name": "render_graph_parallel_recording", "type": "bool", "default": false}
+              ]
+            }
+          ]
+        },
+        {
+          "name": "scene", "cpp_type": "Scene",
+          "fields": [
+            {"name": "scene_path", "type": "string", "default": "./asset/scenes/sponza/Sponza.gltf",
+             "comment": "Absolute paths are supported; escape backslashes in double-quoted TOML strings."},
+            {"name": "enable_cache", "type": "bool", "default": true},
+            {"name": "material_info_log_lines", "type": "int", "default": -1, "template": 20,
+             "comment": "Maximum material information lines during loading; -1 prints every line."}
+          ]
+        },
+        {
+          "name": "remote", "cpp_type": "Remote",
+          "fields": [
+            {"name": "enable", "type": "bool", "default": false, "template": true},
+            {"name": "bind_address", "type": "string", "default": "127.0.0.1"},
+            {"name": "http_port", "type": "uint32", "default": 18080},
+            {"name": "websocket_port", "type": "uint32", "default": 18081}
+          ]
+        }
+      ]
+    }
+  ],
+  "enums": {
+    "EShadingMode": ["DEFAULT_PBR", "DEBUG"],
+    "EBrdfNdfMode": ["BECKMANN", "GGX", "GTR2", "GTR1"],
+    "EBrdfGMode": ["G_SCHLICK", "VIS_UE4", "VIS_UNITY", "VIS_FILAMENT", "VIS_RESPAWN"],
+    "EAaMode": ["NONE", "FXAA_SIMPLIFIED", "FXAA_QUALITY", "SMAA_1X", "SMAA_T2X"],
+    "EAoMode": ["NONE", "SSAO", "SSAO_AO_ONLY", "RTAO", "RTAO_AO_ONLY", "SSDO", "SSDO_AO_ONLY", "LINEARIZED_DEPTH_DIV_10"],
+    "EDenoiserMode": ["NONE", "BILATERAL_FILTER"],
+    "ERtaoSampleMode": ["UNIFORM", "COSINE_WEIGHTED"],
+    "EShadowMapMode": ["NONE", "POINT_CUBE", "CSM", "CSM_AUTO"],
+    "EUpsampleMode": ["None", "BILINEAR", "DEPTH"],
+    "EAnitiAliasMode": ["EAA_TAA"],
+    "EOutputTexture": ["EOT_LDR", "EOT_HDR"],
+    "EJitter": ["MSAA", "Halton", "R2", "WhiteNoise"],
+    "Render::EFinalColor": ["EFC_SceneColor", "EFC_DI", "EFC_EMISSIVE", "EFC_DIFFUSE", "EFC_SPECULAR", "EFC_NORMAL", "EFC_VIEW_DEPTH", "EFC_DEPTH", "EFC_MOTION", "EFC_GRID", "EFC_MATERIAL", "EFC_INSTANCE", "EFC_POSITION", "EFC_CUSTOM"]
+  },
+  "render_types": [
+    {
+      "name": "ProbeVolumeConfig", "owner": "RasterConfig",
+      "fields": [
+        {"name": "enabled", "type": "bool", "default": true},
+        {"name": "count_x", "type": "int", "default": 8},
+        {"name": "count_y", "type": "int", "default": 4},
+        {"name": "count_z", "type": "int", "default": 8},
+        {"name": "origin", "type": "float3", "default": [-8, 0, -8]},
+        {"name": "extent", "type": "float3", "default": [16, 6, 16]},
+        {"name": "intensity_scale", "type": "float", "default": 1},
+        {"name": "blend_distance", "type": "float", "default": 1.5},
+        {"name": "camera_clipmap", "type": "bool", "default": false},
+        {"name": "clipmap_follow_y", "type": "bool", "default": false}
+      ]
+    },
+    {
+      "name": "TonemappingAutoExposureConfig", "owner": "RasterConfig", "nested": true,
+      "fields": [
+        {"name": "enabled", "type": "bool", "default": true},
+        {"name": "log2lum_min", "type": "float", "default": -10},
+        {"name": "log2lum_max", "type": "float", "default": 16},
+        {"name": "histogram_low_percentile", "type": "float", "default": 0.5},
+        {"name": "histogram_high_percentile", "type": "float", "default": 0.9},
+        {"name": "min_adapted_luminance", "type": "float", "default": 0.001},
+        {"name": "max_adapted_luminance", "type": "float", "default": 5000},
+        {"name": "eye_adaptation_speed_up", "type": "float", "default": 2},
+        {"name": "eye_adaptation_speed_down", "type": "float", "default": 2},
+        {"name": "diff_log2_threshold", "type": "float", "default": 0.05},
+        {"name": "aces_tonemapping_enabled", "type": "bool", "default": true},
+        {"name": "debug_visualize", "type": "bool", "default": false}
+      ]
+    },
+    {
+      "name": "RasterConfig", "path": "engine.render.raster",
+      "fields": [
+        {"name": "should_frame_gaussians", "type": "bool", "default": false, "runtime_only": true},
+        {"name": "geometry_enable_alpha_test", "type": "bool", "default": true},
+        {"name": "geometry_alpha_test_blend_pixel_cutoff", "type": "float", "default": 0.5},
+        {"name": "enable_frustum_culling", "type": "bool", "default": true},
+        {"name": "enable_occlusion_culling", "type": "bool", "default": true},
+        {"name": "cluster_lod_error_threshold", "type": "float", "default": 1},
+        {"name": "force_lod_level", "type": "int", "default": -1},
+        {"name": "geometry_debug_visualization", "type": "int", "default": 0},
+        {"name": "tessellated_surface_enabled", "type": "bool", "default": false},
+        {"name": "tessellated_surface_preset", "type": "int", "default": 0},
+        {"name": "tessellated_surface_debug_mode", "type": "int", "default": 0},
+        {"name": "tessellated_surface_grid_resolution", "type": "int", "default": 16},
+        {"name": "tessellated_surface_center", "type": "float3", "default": [0, 0.04, 0]},
+        {"name": "tessellated_surface_half_extent", "type": "float", "default": 8},
+        {"name": "tessellated_surface_target_edge_pixels", "type": "float", "default": 8},
+        {"name": "tessellated_surface_min_tess_factor", "type": "float", "default": 2},
+        {"name": "tessellated_surface_max_tess_factor", "type": "float", "default": 32},
+        {"name": "tessellated_surface_height_scale", "type": "float", "default": 1},
+        {"name": "tessellated_surface_detail_scale", "type": "float", "default": 1},
+        {"name": "tessellated_surface_wind_angle_degrees", "type": "float", "default": 18},
+        {"name": "shading_mode", "type": "EShadingMode", "default": "DEFAULT_PBR"},
+        {"name": "shading_enable_extra_ambient", "type": "bool", "default": false},
+        {"name": "shading_extra_ambient_color", "type": "float3", "default": [1, 1, 1]},
+        {"name": "shading_extra_ambient_intensity", "type": "float", "default": 0.01},
+        {"name": "shading_brdf_enable_multi_scatter", "type": "bool", "default": true},
+        {"name": "shading_brdf_NDF_mode", "type": "EBrdfNdfMode", "default": "GGX"},
+        {"name": "shading_brdf_G_mode", "type": "EBrdfGMode", "default": "VIS_UE4"},
+        {"name": "shading_brdf_G_is_ibl", "type": "bool", "default": false},
+        {"name": "probe_gi_enabled", "type": "bool", "default": false},
+        {"name": "probe_gi_volume_count", "type": "int", "default": 2},
+        {"name": "probe_gi_selected_volume", "type": "int", "default": 0},
+        {"name": "probe_gi_sparse_bricks_enabled", "type": "bool", "default": false},
+        {"name": "probe_gi_brick_resident_distance", "type": "float", "default": 12},
+        {"name": "probe_gi_brick_resident_hysteresis", "type": "float", "default": 2},
+        {"name": "probe_gi_clipmap_anchor_hysteresis", "type": "float", "default": 0.1},
+        {"name": "probe_gi_motion_prefetch_enabled", "type": "bool", "default": true},
+        {"name": "probe_gi_motion_prefetch_threshold", "type": "float", "default": 0.05},
+        {"name": "probe_gi_motion_prefetch_keep_frames", "type": "int", "default": 8},
+        {"name": "probe_gi_physical_probe_capacity", "type": "int", "default": 2048, "default_cpp": "Render::RASTER_PROBE_MAX_COUNT"},
+        {"name": "probe_gi_streaming_enabled", "type": "bool", "default": true},
+        {"name": "probe_gi_streaming_load_budget", "type": "int", "default": 2},
+        {"name": "probe_gi_streaming_eviction_budget", "type": "int", "default": 4},
+        {"name": "probe_gi_adaptive_placement_enabled", "type": "bool", "default": true},
+        {"name": "probe_gi_adaptive_geometry_padding", "type": "float", "default": 0.25},
+        {"name": "probe_gi_adaptive_fine_occupancy", "type": "float", "default": 0.25},
+        {"name": "probe_gi_adaptive_fine_primitives", "type": "int", "default": 64},
+        {"name": "probe_gi_adaptive_hierarchy_enabled", "type": "bool", "default": true},
+        {"name": "probe_gi_adaptive_transition_width", "type": "float", "default": 1.5},
+        {"name": "probe_gi_dirty_tracking_enabled", "type": "bool", "default": true},
+        {"name": "probe_gi_dirty_influence_scale", "type": "float", "default": 1},
+        {"name": "probe_gi_update_scheduler_enabled", "type": "bool", "default": true},
+        {"name": "probe_gi_update_brick_budget", "type": "int", "default": 2},
+        {"name": "probe_gi_volumes", "type": "ProbeVolumeConfig", "count": 4, "cpp_count": "Render::RASTER_PROBE_VOLUME_MAX_COUNT", "default": [{}, {"origin": [-16, -4, -16], "extent": [32, 14, 32], "intensity_scale": 0.85, "blend_distance": 3}, {"enabled": false}, {"enabled": false}]},
+        {"name": "probe_gi_volume_bounds_enabled", "type": "bool", "default": true},
+        {"name": "probe_gi_volume_bounds_thickness", "type": "float", "default": 0.025},
+        {"name": "probe_gi_volume_bounds_color", "type": "float3", "default": [1, 0.78, 0.18]},
+        {"name": "probe_gi_intensity", "type": "float", "default": 0.16},
+        {"name": "probe_gi_normal_bias", "type": "float", "default": 0.12},
+        {"name": "probe_gi_trace_distance", "type": "float", "default": 12},
+        {"name": "probe_gi_trace_ray_count", "type": "int", "default": 64},
+        {"name": "probe_gi_visibility_bias", "type": "float", "default": 0.25},
+        {"name": "probe_gi_visibility_power", "type": "float", "default": 1.8},
+        {"name": "probe_gi_visibility_min_weight", "type": "float", "default": 0.08},
+        {"name": "probe_gi_visibility_strength", "type": "float", "default": 0.85},
+        {"name": "probe_gi_irradiance_hysteresis", "type": "float", "default": 0.92},
+        {"name": "probe_gi_visibility_hysteresis", "type": "float", "default": 0.9},
+        {"name": "probe_gi_sky_intensity", "type": "float", "default": 0.35},
+        {"name": "probe_gi_sky_color", "type": "float3", "default": [0.48, 0.62, 0.95]},
+        {"name": "probe_gi_ground_color", "type": "float3", "default": [0.35, 0.27, 0.18]},
+        {"name": "probe_gi_debug_mode", "type": "int", "default": 0},
+        {"name": "probe_gi_debug_scale", "type": "float", "default": 1},
+        {"name": "probe_gi_gizmo_enabled", "type": "bool", "default": false},
+        {"name": "probe_gi_gizmo_color_mode", "type": "int", "default": 0},
+        {"name": "probe_gi_gizmo_size", "type": "float", "default": 0.22},
+        {"name": "probe_gi_gizmo_thickness", "type": "float", "default": 0.018},
+        {"name": "probe_gi_gizmo_intensity", "type": "float", "default": 1.2},
+        {"name": "probe_gi_gizmo_fixed_color", "type": "float3", "default": [0.05, 0.95, 1]},
+        {"name": "tonemapping_exposure_ev", "type": "float", "default": -2.7},
+        {"name": "tonemapping_reinhard_enabled", "type": "bool", "default": true},
+        {"name": "tonemapping_ae", "type": "TonemappingAutoExposureConfig"},
+        {"name": "aa_mode", "type": "EAaMode", "default": "SMAA_1X"},
+        {"name": "ao_mode", "type": "EAoMode", "default": "RTAO"},
+        {"name": "ao_half_resolution", "type": "bool", "default": true},
+        {"name": "ssao_intensity", "type": "float", "default": 1},
+        {"name": "ssao_spp", "type": "int", "default": 16},
+        {"name": "ssao_sample_radius", "type": "int", "default": 16},
+        {"name": "ssao_max_distance", "type": "float", "default": 1},
+        {"name": "rtao_sample_mode", "type": "ERtaoSampleMode", "default": "COSINE_WEIGHTED"},
+        {"name": "rtao_intensity", "type": "float", "default": 1},
+        {"name": "rtao_ray_trace_distance", "type": "float", "default": 1},
+        {"name": "rtao_spp", "type": "int", "default": 8},
+        {"name": "rtao_denoiser_enable", "type": "bool", "default": true},
+        {"name": "rtao_denoiser_reprojection_enable", "type": "bool", "default": true},
+        {"name": "rtao_denoiser_validation_enable", "type": "bool", "default": true},
+        {"name": "rtao_denoiser_history_clamp_enable", "type": "bool", "default": true},
+        {"name": "rtao_denoiser_motion_weighting_enable", "type": "bool", "default": true},
+        {"name": "rtao_denoiser_history_ratio", "type": "float", "default": 0.9},
+        {"name": "rtao_denoiser_valid_position_threshold", "type": "float", "default": 0.01},
+        {"name": "rtao_denoiser_valid_normal_threshold", "type": "float", "default": 0.8},
+        {"name": "ssdo_depth_bias", "type": "float", "default": 0.001},
+        {"name": "ssdo_sample_radius", "type": "float", "default": 0.16},
+        {"name": "ssdo_indirect_intensity", "type": "float", "default": 1},
+        {"name": "ssdo_max_distance", "type": "float", "default": 0.5},
+        {"name": "ssr_is_ssr_enabled", "type": "bool", "default": false},
+        {"name": "ssr_sample_count", "type": "int", "default": 32},
+        {"name": "ssr_is_enable_jitter", "type": "bool", "default": true},
+        {"name": "ssr_is_force_ground_enable_ssr", "type": "bool", "default": true},
+        {"name": "ssr_roughness_threshold", "type": "float", "default": 0.5},
+        {"name": "ssr_metallic_threshold", "type": "float", "default": 0.5},
+        {"name": "ssr_step_base", "type": "float", "default": 0.025},
+        {"name": "bloom_enabled", "type": "bool", "default": true},
+        {"name": "cooperative_ops_enabled", "type": "bool", "default": false},
+        {"name": "denoiser_mode", "type": "EDenoiserMode", "default": "NONE"},
+        {"name": "denoiser_bfd_spatial_sigma_square", "type": "float", "default": 20},
+        {"name": "denoiser_bfd_range_sigma_square", "type": "float", "default": 0.001},
+        {"name": "denoiser_bfd_kernel_radius", "type": "int", "default": 5},
+        {"name": "ai_is_cuda_enabled", "type": "bool", "default": false},
+        {"name": "ai_trt_visualize_buffer_idx", "type": "int", "default": 18, "default_cpp": "static_cast<int>(s_ai_trt_visualize_buffer_array.size()) - 2", "runtime_only": true},
+        {"name": "ai_trt_visualize_buffer", "type": "string", "default": "Engine2 out_final_output", "default_cpp": "s_ai_trt_visualize_buffer_array[s_ai_trt_visualize_buffer_array.size() - 2]", "runtime_only": true},
+        {"name": "ai_trt_force_ldr", "type": "bool", "default": true},
+        {"name": "shadow_map_mode", "type": "EShadowMapMode", "default": "CSM"},
+        {"name": "shadow_sampling_mode", "type": "int", "default": 0},
+        {"name": "shadow_csm_num_of_cascades", "type": "int", "default": 4},
+        {"name": "shadow_csm_lerp_factor", "type": "float", "default": 0.015},
+        {"name": "shadow_csm_blend_percentage", "type": "float", "default": 0.3},
+        {"name": "shadow_csm_blend_option", "type": "bool", "default": true},
+        {"name": "shadow_csm_sm_size", "type": "int", "default": 4096},
+        {"name": "shadow_csm_visualize_cascade", "type": "bool", "default": false},
+        {"name": "shadow_point_multiview_enabled", "type": "bool", "default": true},
+        {"name": "shadow_csm_auto_max_cover_ratio_of_camera", "type": "float", "default": 0.25},
+        {"name": "shadow_cache_enabled", "type": "bool", "default": true},
+        {"name": "shadow_cache_disable_first_n_cascades", "type": "int", "default": 0},
+        {"name": "shadow_pcss_enabled", "type": "bool", "default": true},
+        {"name": "shadow_pcss_light_size_world", "type": "float", "default": 0.01},
+        {"name": "shadow_csm_cover_ratio_of_camera", "type": "float", "count": 4, "cpp_count": "CSM_MAX_CASCADES", "default": [0.005, 0.02, 0.1, 0.25]},
+        {"name": "shadow_cache_camera_move_threshold_in_texels", "type": "float", "count": 4, "cpp_count": "CSM_MAX_CASCADES", "default": [1, 8, 32, 128]},
+        {"name": "skybox_exposure_correct_enabled", "type": "bool", "default": true},
+        {"name": "skybox_exposure_correct_factor_log10", "type": "float", "default": -0.3010299956639812, "default_cpp": "log10f(0.5f)"},
+        {"name": "upsample_mode", "type": "EUpsampleMode", "default": "None"},
+        {"name": "outSize_x", "type": "int", "default": 1080},
+        {"name": "outSize_y", "type": "int", "default": 1920},
+        {"name": "inSize_x", "type": "int", "default": 540},
+        {"name": "debug_param", "type": "float", "default": 1},
+        {"name": "debug_fps_limit_enable", "type": "bool", "default": false},
+        {"name": "debug_fps_limit", "type": "float", "default": 60},
+        {"name": "selected_frame_buffer_index", "type": "uint32", "default": 0, "runtime_only": true}
+      ]
+    },
+    {"name": "GridConfig", "owner": "RaytracingConfig", "fields": [
+      {"name": "grid_mode", "type": "int", "default": 1},
+      {"name": "light_per_ceil", "type": "int", "default": 512},
+      {"name": "cell_size", "type": "float", "default": 1}
+    ]},
+    {"name": "ReSTIRDIInitialSampleConfig", "owner": "RaytracingConfig", "fields": [
+      {"name": "local_light_sample_mode", "type": "uint32", "default": 2, "default_cpp": "Render::s_di_local_light_sample_mode_grid"},
+      {"name": "enable_adaptive_local_light_sampling", "type": "bool", "default": true},
+      {"name": "grid_min_local_light_count", "type": "int", "default": 64}
+    ]},
+    {"name": "ReSTIRDITemporalResampleConfig", "owner": "RaytracingConfig", "fields": [
+      {"name": "bias_correction", "type": "uint32", "default": 3, "default_cpp": "Render::s_di_bias_correction_traced"},
+      {"name": "depth_threshold", "type": "float", "default": 10},
+      {"name": "normal_threshold", "type": "float", "default": 0.5}
+    ]},
+    {"name": "ReSTIRDISpatialResampleConfig", "owner": "RaytracingConfig", "fields": [
+      {"name": "bias_correction", "type": "uint32", "default": 3, "default_cpp": "Render::s_di_bias_correction_traced"},
+      {"name": "depth_threshold", "type": "float", "default": 0.2},
+      {"name": "normal_threshold", "type": "float", "default": 0.5},
+      {"name": "num_spatial_samples", "type": "int", "default": 2}
+    ]},
+    {"name": "ReSTIRDIConfig", "owner": "RaytracingConfig", "fields": [
+      {"name": "initial_sample_config", "type": "ReSTIRDIInitialSampleConfig"},
+      {"name": "temporal_resample_config", "type": "ReSTIRDITemporalResampleConfig"},
+      {"name": "spatial_resample_config", "type": "ReSTIRDISpatialResampleConfig"}
+    ]},
+    {"name": "ReBlurHitDistParams", "owner": "RaytracingConfig", "fields": [
+      {"name": "A", "type": "float", "default": 3},
+      {"name": "B", "type": "float", "default": 0.1},
+      {"name": "C", "type": "float", "default": 20},
+      {"name": "D", "type": "float", "default": -25}
+    ]},
+    {"name": "ReBlurAntilagParams", "owner": "RaytracingConfig", "fields": [
+      {"name": "luminance_sigma_scale", "type": "float", "default": 2},
+      {"name": "hit_dist_sigma_scale", "type": "float", "default": 2},
+      {"name": "luminance_antilag_power", "type": "float", "default": 0.5},
+      {"name": "hit_dist_antilag_power", "type": "float", "default": 1}
+    ]},
+    {"name": "DenoiserConfig", "owner": "RaytracingConfig", "fields": [
+      {"name": "hit_dist_params", "type": "ReBlurHitDistParams"},
+      {"name": "antilag_params", "type": "ReBlurAntilagParams"},
+      {"name": "denoiser_type", "type": "uint32", "default": 2, "default_cpp": "Render::s_denoiser_mode_relax"}
+    ]},
+    {"name": "ToneMappingConfig", "owner": "RaytracingConfig", "fields": [
+      {"name": "histogram_low_percentile", "type": "float", "default": 0.8},
+      {"name": "histogram_high_percentile", "type": "float", "default": 0.95},
+      {"name": "eye_adaptation_speed_up", "type": "float", "default": 1},
+      {"name": "eye_adaptation_speed_down", "type": "float", "default": 0.5},
+      {"name": "min_adapted_luminance", "type": "float", "default": 0.02},
+      {"name": "max_adapted_luminance", "type": "float", "default": 0.5},
+      {"name": "exposure_bias", "type": "float", "default": -0.5},
+      {"name": "white_point", "type": "float", "default": 1.5},
+      {"name": "enable_color_lut", "type": "bool", "default": true},
+      {"name": "enable_tone_mapping", "type": "bool", "default": true}
+    ]},
+    {"name": "AntiAliasConfig", "owner": "RaytracingConfig", "fields": [
+      {"name": "aa_mode", "type": "EAnitiAliasMode", "default": "EAA_TAA"},
+      {"name": "jitter_mode", "type": "EJitter", "default": "MSAA"},
+      {"name": "new_frame_weight", "type": "float", "default": 0.04},
+      {"name": "clamping_factor", "type": "float", "default": 1.3},
+      {"name": "max_radiance", "type": "float", "default": 200},
+      {"name": "enable_history_clamping", "type": "bool", "default": true}
+    ]},
+    {"name": "ExportConfig", "owner": "RaytracingConfig", "fields": [
+      {"name": "output_texture", "type": "EOutputTexture", "default": "EOT_LDR"},
+      {"name": "b_export", "type": "bool", "default": false, "runtime_only": true}
+    ]},
+    {"name": "RTProcessLightConfig", "owner": "RaytracingConfig", "fields": [
+      {"name": "parallel_mode", "type": "bool", "default": false},
+      {"name": "num_threads", "type": "int", "default": 4}
+    ]},
+    {"name": "RaytracingConfig", "path": "engine.render.raytracing", "fields": [
+      {"name": "sun_direction", "type": "float3", "default": [0, 0.5, 0.16]},
+      {"name": "directional_light_intensity", "type": "float", "default": 6},
+      {"name": "sun_angular_diameter", "type": "float", "default": 0.533},
+      {"name": "max_bounce", "type": "uint32", "default": 4},
+      {"name": "grid_config", "type": "GridConfig"},
+      {"name": "restir_di_cfg", "type": "ReSTIRDIConfig"},
+      {"name": "denoiser_cfg", "type": "DenoiserConfig"},
+      {"name": "tone_mapping_cfg", "type": "ToneMappingConfig"},
+      {"name": "aa_cfg", "type": "AntiAliasConfig"},
+      {"name": "export_cfg", "type": "ExportConfig"},
+      {"name": "process_light_cfg", "type": "RTProcessLightConfig"},
+      {"name": "final_color", "type": "Render::EFinalColor", "default": "EFC_SceneColor"}
+    ]}
+  ],
+  "extra_tables": [
+    {
+      "path": "cvars",
+      "comment": "Canonical startup overrides; quoted keys preserve dotted CVar names. These override legacy fields above.",
+      "examples": ["\"RHI.Submission.BatchWindow\" = 2", "\"Render.Raster.RDG.ParallelRecording\" = true"]
+    },
+    {
+      "path": "profiles.rdg-parallel.cvars",
+      "comment": "Inactive unless selected with --profile rdg-parallel.",
+      "values": {"Render.Raster.RDG.ParallelRecording": true, "Render.Raytracing.RDG.ParallelRecording": true}
+    }
+  ]
+}

@@ -1,5 +1,19 @@
 set(moer_test_folder "test")
 
+add_executable(TestConfigGeneration ConfigGenerationTest.cpp)
+target_link_libraries(TestConfigGeneration PRIVATE Moer::Render)
+target_compile_definitions(TestConfigGeneration PRIVATE MOER_CONFIG_TEMPLATE="${moer_root_dir}/template.MoerEngine.toml")
+set_target_properties(TestConfigGeneration PROPERTIES FOLDER "${moer_test_folder}")
+add_test(NAME ConfigGenerationContract COMMAND $<TARGET_FILE:TestConfigGeneration>)
+set_tests_properties(ConfigGenerationContract PROPERTIES TIMEOUT 60)
+add_test(NAME ConfigCodegenContract COMMAND "${Python3_EXECUTABLE}" "${moer_root_dir}/tools/config/test_generate.py")
+set_tests_properties(ConfigCodegenContract PROPERTIES TIMEOUT 60)
+
+# Explicit integration test: requires a Vulkan RT GPU, scene assets and matching --config fixtures.
+add_executable(TestConfigStartup ConfigStartupTest.cpp)
+target_link_libraries(TestConfigStartup PRIVATE Moer::Runtime)
+set_target_properties(TestConfigStartup PROPERTIES FOLDER "${moer_test_folder}")
+
 # Explicit integration test: requires a Vulkan device and runtime shader compilation.
 if (NOT APPLE)
     add_executable(TestGaussianRasterGpu GaussianRasterGpuTest.cpp

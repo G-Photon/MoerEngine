@@ -38,6 +38,7 @@ add_library(${target_name} SHARED
     ${render_shader_sources}
 )
 add_library(Moer::Render ALIAS ${target_name})
+add_dependencies(${target_name} moer_config_codegen)
 if(MOER_RDG_DIAGNOSTICS)
     target_sources(${target_name} PRIVATE "${moer_source_dir}/test/diagnostics/RdgAllocationOverrides.cpp")
 endif()

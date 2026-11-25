@@ -22,6 +22,7 @@ set(moer_root_dir ${CMAKE_CURRENT_SOURCE_DIR})
 set(moer_source_dir ${moer_root_dir}/source) 
 set(moer_third_party_dir "${moer_root_dir}/3rdparty")
 set(moer_shader_dir "${moer_root_dir}/shaders")
+include("${moer_root_dir}/tools/cmake/config_codegen.cmake")
 
 # 构建相关
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

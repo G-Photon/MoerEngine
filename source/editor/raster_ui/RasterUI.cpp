@@ -4,8 +4,6 @@
 
 // 提供 Raster 管线的功能控制项和轻量级运行时诊断信息。
 
-#include "config/ConfigManager.h"
-
 #include <imgui.h>
 #include <string_view>
 
@@ -14,22 +12,7 @@ namespace Moer {
 RasterUI::RasterUI(RasterConfig& config, const RasterFrameStatus& status) :
     m_cooperative_ops_ui(config, status.cooperative_ops_status),
     m_config(config),
-    m_status(status) {
-    if (ConfigManager::GetInstance().GetConfig().engine.render.raster.low_quality_mode) {
-        m_config.ao_mode = EAoMode::SSAO;
-
-        m_config.shadow_map_mode                     = EShadowMapMode::CSM;
-        m_config.shadow_csm_num_of_cascades          = 1;
-        m_config.shadow_csm_sm_size                  = 2048;
-        m_config.shadow_csm_cover_ratio_of_camera[0] = 0.03f;
-
-        m_config.aa_mode = EAaMode::FXAA_SIMPLIFIED;
-    }
-
-    if (!ConfigManager::GetInstance().GetConfig().engine.render.raster.enable_shadow) {
-        m_config.shadow_map_mode = EShadowMapMode::NONE;
-    }
-}
+    m_status(status) {}
 
 void RasterUI::ShowConfig() {
     if (!ImGui::TreeNode("Raster Settings")) {

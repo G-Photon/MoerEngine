@@ -25,6 +25,7 @@
 
 // Editor
 #include "renderer/common/RuntimeAssets.h"
+#include "renderer/RendererConfig.h"
 #include "renderer/raster/RasterRenderer.h"
 #include "renderer/raytracing/RaytracingRenderer.h"
 
@@ -1382,6 +1383,10 @@ void Engine::Init(
     m_shader_manager_initialized = true;
 
     m_editor_config = MakeShared<EditorConfig>();
+    LoadRendererConfigFromTomlFile(
+        config_path.generic_string(), config,
+        m_editor_config->raster_config, m_editor_config->raytracing_config
+    );
     m_editor_config->selected_render_method =
         ParseDefaultRenderMethod(config.engine.render.default_render_method);
     m_editor_config->scene_path = config.engine.scene.scene_path;
