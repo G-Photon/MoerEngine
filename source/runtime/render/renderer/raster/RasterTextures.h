@@ -33,8 +33,8 @@ namespace Moer::Render::Raster {
     X(TexHandle, denoiser_output, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))  \
     X(TexHandle, upsample_output, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))  \
     X(TexHandle, ssr_output, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))       \
-    X(TexHandle, aa_texture_1, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))     \
-    X(TexHandle, aa_texture_2, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))     \
+    X(TexHandle, aa_texture_1, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR).GraphTransient()) \
+    X(TexHandle, aa_texture_2, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR).GraphTransient()) \
     X(TexHandle, aa_texture_3, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))     \
     X(TexHandle, aa_texture_4, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))     \
     X(TexHandle, aa_output, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))        \
@@ -159,7 +159,7 @@ struct RasterTextures {
         TexConfig cfg = (CONFIG);                                                             \
         const bool create_resource =                                                          \
             cfg.b_output_size ? create_output_resources : create_scene_resources;             \
-        if (create_resource) {                                                                 \
+        if (create_resource && !cfg.graph_transient) {                                          \
             const uint2& texture_size = cfg.b_output_size ? output_size : scene_size;          \
             AssetTool::CreateRasterResource<TEXTYPE>(this->NAME, device, #NAME, texture_size, cfg); \
         }                                                                                     \
@@ -194,7 +194,7 @@ struct RasterTextures {
 #define X(TYPE, NAME, TEXTYPE, CONFIG)                                                               \
     {                                                                                                \
         const TexConfig cfg = (CONFIG);                                                              \
-        if (!cfg.is_asset && (cfg.b_output_size ? create_output_resources : create_scene_resources)) \
+        if (!cfg.is_asset && !cfg.graph_transient && (cfg.b_output_size ? create_output_resources : create_scene_resources)) \
             initialized.emplace_back(NAME.tex->GetView().GetTexture());                              \
     }
         RASTER_TEXTURES_TABLE
@@ -241,7 +241,7 @@ struct RasterTextures {
         TexConfig cfg = (CONFIG);                                                            \
         const bool allocate_resource =                                                       \
             cfg.b_output_size ? allocate_output_resources : allocate_scene_resources;        \
-        if (allocate_resource && (!cfg.is_asset || NAME.hdl == 0u)) {                        \
+        if (allocate_resource && !cfg.graph_transient && (!cfg.is_asset || NAME.hdl == 0u)) { \
             AssetTool::AllocateRasterResourceHandle(bindless_array, NAME, cfg);              \
         }                                                                                    \
     }
@@ -281,7 +281,7 @@ struct RasterTextures {
         TexConfig cfg = (CONFIG);                                           \
         const bool free_resource =                                          \
             cfg.b_output_size ? free_output_resources : free_scene_resources; \
-        if (free_resource && (!cfg.is_asset || is_free_external_assets)) {   \
+        if (free_resource && !cfg.graph_transient && (!cfg.is_asset || is_free_external_assets)) { \
             AssetTool::FreeRasterResourceHandle(bindless_array, NAME);      \
         }                                                                   \
     }
@@ -303,25 +303,24 @@ struct RasterTextures {
         }
     }
 
-    Array<TextureView> GetDisplayableFrameBuffersView() {
-        Array<TextureView> views;
-#define X(TYPE, NAME, TEXTYPE, CONFIG)                                     \
-    assert(this->NAME.tex != nullptr && "There is an empty FrameBuffer!"); \
-    views.emplace_back(this->NAME.tex->GetView());
+    Array<std::string> GetDisplayableFrameBufferNames() {
+        Array<std::string> names;
+#define X(TYPE, NAME, TEXTYPE, CONFIG) \
+    if (std::string_view(#NAME) != "output") names.emplace_back(#NAME);
         RASTER_TEXTURES_TABLE
         RASTER_TEXTURES_TABLE_DOWNSAMPLED
 #undef X
-        // 去除 output
-        bool b_has_erased = false;
-        for (auto it = views.begin(); it != views.end(); ++it) {
-            if (it->GetTexture()->GetName() == "output") {
-                b_has_erased = true;
-                views.erase(it);
-                break;
-            }
-        }
-        assert(b_has_erased && "output not found in views");
-        return views;
+        return names;
+    }
+
+    // Logical names remain stable when RDG aliases or retires physical images.
+    TextureView GetFrameBufferView(std::string_view name) {
+#define X(TYPE, NAME, TEXTYPE, CONFIG) \
+    if (name == #NAME) return NAME.tex ? NAME.tex->GetView() : TextureView{};
+        RASTER_TEXTURES_TABLE
+        RASTER_TEXTURES_TABLE_DOWNSAMPLED
+#undef X
+        return {};
     }
 };
 

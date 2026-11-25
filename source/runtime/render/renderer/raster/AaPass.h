@@ -13,6 +13,7 @@
 #include "RasterTool.h"
 #include "rendergraph/RenderGraph.h"
 
+#include <array>
 #include <string_view>
 
 namespace Moer::Render::Raster {
@@ -119,6 +120,22 @@ public:
         RenderGraph::TextureHandle aa_output{};
     };
 
+    struct GraphResult {
+        RenderGraph::TextureHandle edges{};
+        RenderGraph::TextureHandle weights{};
+    };
+
+    struct FrameBindings {
+        BindlessArrayRef bindless{};
+        TextureWithHandle input{}, output{}, edges{}, weights{}, current{}, previous{};
+        uint32 depth{}, area{}, search{};
+    };
+
+    struct FrameTextures {
+        TextureRef input{}, output{}, depth{};
+        std::array<TextureRef, 2> history{};
+    };
+
     struct RecordParameters {
         EAaMode                              mode{EAaMode::NONE};
         BindlessArrayRef                     bindless{};
@@ -132,15 +149,11 @@ public:
         SmaaSharedPipelineBindlessParam       smaa{};
     };
 
-    AaPass(RasterContext& context) {
+    AaPass(RasterContext& context) : AaPass(
+        context.device, context.manager, context.cmd_list, context.textures.aa_output.tex->GetFormat()
+    ) {}
 
-        auto& tex    = context.textures;
-        auto  format = tex.aa_output.tex->GetFormat();
-
-        assert(format == tex.aa_texture_1.tex->GetFormat());
-        assert(format == tex.aa_texture_2.tex->GetFormat());
-        assert(format == tex.aa_texture_3.tex->GetFormat());
-
+    AaPass(RenderDevice& device, ShaderManager& manager, CommandList& uploads, EPixelFormat format) {
         const auto create_fullscreen_pipeline = [&]<typename Pipeline>(
                                                     Pipeline&        pipeline,
                                                     std::string_view vertex_path,
@@ -151,7 +164,7 @@ public:
             GfxPsoCreateInfo pso_full_screen_info(
                 RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
             );
-            pipeline = context.manager.Raster()
+            pipeline = manager.Raster()
                            .Vertex(vertex_path, vertex_entry)
                            .Pixel(pixel_path, pixel_entry)
                            .Build<Pipeline>(std::move(pso_full_screen_info));
@@ -184,11 +197,9 @@ public:
         );
 
         // Other resources initialization
-        aa_texture_34[0] = &tex.aa_texture_3;
-        aa_texture_34[1] = &tex.aa_texture_4;
         ResetHistory();
 
-        LoadSmaaResources(context);
+        LoadSmaaResources(device, uploads);
     }
 
     void ResetHistory() {
@@ -203,57 +214,52 @@ public:
                    0u;
     }
 
-    void LoadSmaaResources(RasterContext& context) {
-        Sampler linear_sampler(SF_LINEAR, SAM_REPEAT);
-
+    void LoadSmaaResources(RenderDevice& device, CommandList& uploads) {
         // smaa area tex
-        smaa_area_tex.tex = context.device.CreateTexture(
+        smaa_area_tex.tex = device.CreateTexture(
             "smaa_area_tex",
             Extent2D(SMAA_AREATEX_WIDTH, SMAA_AREATEX_HEIGHT),
             PF_R8G8_UNORM,
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
         );
         RecordNewGraphicsTextureUpload(
-            context.cmd_list,
+            uploads,
             std::span<byte>(
                 (byte*)&SmaaPrecomputedTextures::areaTexBytes, sizeof(SmaaPrecomputedTextures::areaTexBytes)
             ),
             smaa_area_tex.tex
         );
-        smaa_area_tex.hdl = context.bdls->AllocateTexture(smaa_area_tex.tex, linear_sampler);
 
         // smaa search tex
-        smaa_search_tex.tex = context.device.CreateTexture(
+        smaa_search_tex.tex = device.CreateTexture(
             "smaa_search_tex",
             Extent2D(SMAA_SEARCHTEX_WIDTH, SMAA_SEARCHTEX_HEIGHT),
             PF_R8_UNORM,
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
         );
         RecordNewGraphicsTextureUpload(
-            context.cmd_list,
+            uploads,
             std::span<byte>(
                 (byte*)&SmaaPrecomputedTextures::searchTexBytes,
                 sizeof(SmaaPrecomputedTextures::searchTexBytes)
             ),
             smaa_search_tex.tex
         );
-        smaa_search_tex.hdl = context.bdls->AllocateTexture(smaa_search_tex.tex, linear_sampler);
     }
 
     [[nodiscard]] RecordParameters Prepare(
-        const RasterContext& context,
         const RasterConfig&  ui_config,
         const Camera&        camera,
-        TextureWithHandle    input_image,
-        uint8                smaa_t2x_phase
+        uint8                smaa_t2x_phase,
+        const FrameBindings& bindings
     ) const {
         RecordParameters parameters{};
         parameters.mode      = ui_config.aa_mode;
-        parameters.bindless  = context.bdls;
-        parameters.input     = std::move(input_image);
-        parameters.output    = context.textures.aa_output;
-        parameters.texture_1 = context.textures.aa_texture_1;
-        parameters.texture_2 = context.textures.aa_texture_2;
+        parameters.bindless  = bindings.bindless;
+        parameters.input     = bindings.input;
+        parameters.output    = bindings.output;
+        parameters.texture_1 = bindings.edges;
+        parameters.texture_2 = bindings.weights;
 
         if (ui_config.aa_mode == EAaMode::NONE ||
             ui_config.aa_mode == EAaMode::FXAA_SIMPLIFIED ||
@@ -301,32 +307,29 @@ public:
         const Matrix4x4f previous =
             had_valid_history ? current_view_proj : camera.GetViewProjectionMatrix();
         const uint8 phase = uses_temporal_history ? smaa_t2x_phase : 0u;
-        assert(phase < aa_texture_34.size());
-        parameters.temporal_output       = *aa_texture_34[phase];
+        assert(phase < 2);
+        parameters.temporal_output       = bindings.current;
 
         parameters.smaa = [&]() {
             SmaaSharedPipelineBindlessParam param{};
             param.clip2world         = Transpose(camera.GetViewProjectionMatrixInv());
             param.aa_mode            = static_cast<uint32>(ui_config.aa_mode);
             param.color_tex          = parameters.input.hdl;
-            param.depth_tex          = context.textures.depth_linear_sampler.hdl;
-            param.search_tex         = smaa_search_tex.hdl;
-            param.area_tex           = smaa_area_tex.hdl;
+            param.depth_tex          = bindings.depth;
+            param.search_tex         = bindings.search;
+            param.area_tex           = bindings.area;
             param.edges_tex          = parameters.texture_1.hdl;
             param.blend_tex          = parameters.texture_2.hdl;
             param.current_color_tex  = parameters.temporal_output.hdl;
-            param.previous_color_tex =
-                aa_texture_34[
-                    had_valid_history ? static_cast<uint8>(phase ^ 1u) : phase
-                ]->hdl;
+            param.previous_color_tex = had_valid_history ? bindings.previous.hdl : bindings.current.hdl;
             param.frame_index        = phase;
             param.point_sampler      = GetSamplerIdx(Sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE));
             param.linear_sampler     = GetSamplerIdx(Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
             param.rt_metrics         = float4(
-                1.0f / context.textures.aa_output.GetSizeX(),
-                1.0f / context.textures.aa_output.GetSizeY(),
-                context.textures.aa_output.GetSizeX(),
-                context.textures.aa_output.GetSizeY()
+                1.0f / parameters.output.GetSizeX(),
+                1.0f / parameters.output.GetSizeY(),
+                parameters.output.GetSizeX(),
+                parameters.output.GetSizeY()
             );
             param.clip2prev_clip = Transpose(previous * camera.GetViewProjectionMatrixInv());
             return param;
@@ -375,14 +378,25 @@ public:
                   ColorAttachment(parameters.output.tex));
     }
 
-    void AddToGraph(
+    RENDER_API GraphResult AddToGraph(
         RenderGraph& graph,
         const RasterContext& context,
         const RasterConfig& ui_config,
         const Camera& camera,
         TextureWithHandle input_image,
         uint8 smaa_phase,
-        GraphResources resources
+        GraphResources resources,
+        bool inspect_weights = false
+    );
+
+    RENDER_API GraphResult AddRecordPasses(
+        RenderGraph& graph,
+        const RasterConfig& config,
+        const Camera& camera,
+        FrameTextures textures,
+        uint8 phase,
+        GraphResources resources,
+        bool inspect_weights = false
     );
 
     void CommitFrame(EAaMode mode, uint8 smaa_t2x_phase, const Matrix4x4f& view_proj) {
@@ -400,7 +414,6 @@ private:
     SmaaT2xResolvePipeline              smaa_t2x_resolve_pipeline;
 
     // smaa resources
-    StaticArray<TextureWithHandle*, 2> aa_texture_34;
     uint8                              frame_parity = 0;
     bool                               history_valid = false;
     Matrix4x4f                         current_view_proj = Matrix4x4f::Identity();

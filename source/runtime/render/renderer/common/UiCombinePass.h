@@ -174,9 +174,6 @@ public:
         float2 scene_color_position,
         float2 scene_color_resolution,
         TextureView window_framebuffer,
-        TextureView selected_framebuffer,
-        TextureView default_output,
-        TextureView processing_input,
         GraphResources resources
     );
 

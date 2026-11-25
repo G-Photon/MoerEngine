@@ -28,6 +28,7 @@ struct TexConfig {
     bool        is_asset           = false;
     bool        b_create_mip_views = false;
     bool        b_output_size      = false;
+    bool        graph_transient    = false;
 
     //为Depth设计，共用一张纹理
     template<typename T>
@@ -79,6 +80,11 @@ struct TexConfig {
 
     TexConfig& OutputSize(bool b = true) {
         b_output_size = b;
+        return *this;
+    }
+
+    TexConfig& GraphTransient() {
+        graph_transient = true;
         return *this;
     }
 

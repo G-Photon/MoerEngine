@@ -966,34 +966,24 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         RenderGraph::TextureHandle processing_image_resource{};
         TextureView         selected_framebuffer_view{};
         TextureView         window_framebuffer_view{};
+        std::string         selected_framebuffer_name;
         if (frame_packet.ui_composition.enabled) {
-            if (frame_packet.validation_selected_frame_buffer_name.empty()) {
-                selected_framebuffer_view = raster_context.GetSelectedFrameBufferView(
-                    raster_config.selected_frame_buffer_index
-                );
-            } else {
-                const auto displayable_views = raster_context.GetDisplayableFrameBuffersView();
-                const auto selected = std::find_if(
-                    displayable_views.begin(),
-                    displayable_views.end(),
-                    [&](const TextureView& view) {
-                        return view.GetTexture()->GetName() ==
-                               frame_packet.validation_selected_frame_buffer_name;
-                    }
-                );
-                if (selected == displayable_views.end()) {
+            selected_framebuffer_name = raster_context.GetSelectedFrameBufferName(
+                raster_config.selected_frame_buffer_index
+            );
+            if (!frame_packet.validation_selected_frame_buffer_name.empty()) {
+                const auto names = raster_context.GetDisplayableFrameBufferNames();
+                if (std::find(names.begin(), names.end(), frame_packet.validation_selected_frame_buffer_name) == names.end()) {
                     LOG_ERROR(
                         "[ThreadingValidation][RasterFramebuffer] selected framebuffer '{}' no longer "
                         "exists; using the UI-selected framebuffer instead.",
                         frame_packet.validation_selected_frame_buffer_name
                     );
-                    selected_framebuffer_view = raster_context.GetSelectedFrameBufferView(
-                        raster_config.selected_frame_buffer_index
-                    );
                 } else {
-                    selected_framebuffer_view = *selected;
+                    selected_framebuffer_name = frame_packet.validation_selected_frame_buffer_name;
                 }
             }
+            selected_framebuffer_view = raster_context.textures.GetFrameBufferView(selected_framebuffer_name);
             if (frame_packet.ui_composition.window_frame_buffer) {
                 window_framebuffer_view = frame_packet.ui_composition.window_frame_buffer->GetView();
             }
@@ -1186,7 +1176,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     ImportRasterBuffer(graph, "tonemapping_exposure", tonemapping_exposure.Get());
                 graph_resources.tonemapping_output =
                     import_texture("tonemapping_output", raster_context.textures.tonemapping_output.tex);
-                if (frame_packet.ui_composition.enabled) {
+                if (frame_packet.ui_composition.enabled && selected_framebuffer_view.GetTexture()) {
                     graph_resources.selected_framebuffer = import_physical_texture(
                         "selected_framebuffer", selected_framebuffer_view.GetTexture()
                     );
@@ -1486,7 +1476,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     processing_image_resource = composite_resource;
                 }
                 // Reserved boundary for a future transparent-geometry pass.
-                aa_pass->AddToGraph(
+                const auto aa_graph = aa_pass->AddToGraph(
                     graph,
                     raster_context,
                     raster_config,
@@ -1495,8 +1485,14 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     smaa_t2x_phase,
                     {.input     = processing_image_resource,
                      .depth     = graph_resources.depth,
-                     .aa_output = graph_resources.aa_output}
+                     .aa_output = graph_resources.aa_output},
+                    selected_framebuffer_name == "aa_texture_2"
                 );
+                if (selected_framebuffer_name == "aa_texture_1") {
+                    graph_resources.selected_framebuffer = aa_graph.edges;
+                } else if (selected_framebuffer_name == "aa_texture_2") {
+                    graph_resources.selected_framebuffer = aa_graph.weights;
+                }
                 processing_image          = raster_context.textures.aa_output;
                 processing_image_resource = graph_resources.aa_output;
                 bloom_pass->AddToGraph(
@@ -1607,9 +1603,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     ui_frame.scene_color_position,
                     ui_frame.scene_color_resolution,
                     window_framebuffer_view,
-                    selected_framebuffer_view,
-                    TextureView(raster_context.textures.output.tex),
-                    TextureView(processing_image.tex),
                     {.processing_input     = processing_image_resource,
                      .selected_framebuffer = graph_resources.selected_framebuffer,
                      .window_framebuffer   = graph_resources.window_framebuffer,
@@ -1808,9 +1801,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     feedback.frame_id              = frame_packet.frame_id;
     feedback.main_present_receipt  = std::move(main_present_receipt);
     if (frame_packet.frame_id == 0) {
-        for (const TextureView& view : raster_context.GetDisplayableFrameBuffersView()) {
-            feedback.displayable_frame_buffer_names.emplace_back(view.GetTexture()->GetName());
-        }
+        feedback.displayable_frame_buffer_names = raster_context.GetDisplayableFrameBufferNames();
     }
     return feedback;
 }

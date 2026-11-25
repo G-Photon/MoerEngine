@@ -822,38 +822,116 @@ void SsrPass::AddToGraph(
     );
 }
 
-void AaPass::AddToGraph(
+AaPass::GraphResult AaPass::AddToGraph(
     RenderGraph& graph,
     const RasterContext& context,
     const RasterConfig& ui_config,
     const Camera& camera,
     TextureWithHandle input_image,
     uint8 smaa_phase,
-    GraphResources resources
+    GraphResources resources,
+    bool inspect_weights
 ) {
     MOER_PROFILE_SCOPE("Raster.AddToGraph.AaPass");
-    auto prepared = graph.AddSetupPass(
-        "AntiAliasing.Prepare",
-        std::move(input_image),
-        [this, &context, &ui_config, &camera, smaa_phase](const TextureWithHandle& input) {
-            return Prepare(context, ui_config, camera, input, smaa_phase);
-        }
-    );
-    if (!prepared.IsValid()) {
-        return;
-    }
+    return AddRecordPasses(graph, ui_config, camera, {
+        .input = input_image.tex,
+        .output = context.textures.aa_output.tex,
+        .depth = context.textures.depth_linear_sampler.tex->CastToTextureRef(),
+        .history = {context.textures.aa_texture_3.tex, context.textures.aa_texture_4.tex}
+    }, smaa_phase, resources, inspect_weights);
+}
 
+AaPass::GraphResult AaPass::AddRecordPasses(
+    RenderGraph& graph,
+    const RasterConfig& ui_config,
+    const Camera& camera,
+    FrameTextures textures,
+    uint8 smaa_phase,
+    GraphResources resources,
+    bool inspect_weights
+) {
+    if (!textures.input || !textures.output || smaa_phase > 1) {
+        throw std::invalid_argument("AA requires input/output textures and a valid temporal phase");
+    }
+    if (ui_config.aa_mode == EAaMode::SMAA_T2X &&
+        (!textures.depth || !textures.history[0] || !textures.history[1])) {
+        throw std::invalid_argument("SMAA T2x requires depth and both persistent history images");
+    }
     using State       = RenderGraph::TextureAccessType;
-    const auto import = [&](std::string_view name, const TextureWithHandle& texture) {
-        return ImportRasterTexture(graph, name, texture.tex.Get());
+    const auto import = [&](std::string_view name, const TextureRef& texture) {
+        return ImportRasterTexture(graph, name, texture.Get());
     };
-    const auto texture_1 = import("AA.edges_or_luma", context.textures.aa_texture_1);
     const bool smaa = ui_config.aa_mode >= EAaMode::SMAA_1X;
     const bool temporal = ui_config.aa_mode == EAaMode::SMAA_T2X;
+    const auto extent = textures.input->GetExtent();
+    const RGTransientTextureDesc scratch_desc{
+        .extent = Extent3D(extent.x, extent.y, 1),
+        .format = textures.output->GetFormat(),
+        .usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT |
+                 ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC
+    };
+    const auto texture_1 = graph.CreateTransientTexture("AA.edges_or_luma", scratch_desc);
+    const auto texture_2 = smaa || inspect_weights ?
+        graph.CreateTransientTexture("AA.weights", scratch_desc) : RenderGraph::TextureHandle{};
+    auto prepared = std::make_shared<RecordParameters>();
+    const auto bindings_token = graph.ImportToken("AA.bindings", prepared.get());
+    // Resolve pooled images after compilation. A private table avoids mutating
+    // the scene's shared bindings from parallel recording callbacks.
+    graph.AddRecordPass(
+        "AA.PublishBindings",
+        [=](RenderGraph::PassBuilder& builder) { builder.Write(bindings_token); },
+        [this, &graph, &ui_config, &camera, textures, smaa_phase,
+         texture_1, texture_2, temporal, smaa, prepared](CommandList& commands) {
+            FrameBindings bindings{};
+            bindings.bindless = RenderDevice::Get().CreateBindlessArray(16);
+            const auto bind = [&](TextureRef texture, Sampler sampler = {SF_LINEAR, SAM_REPEAT}) {
+                TextureWithHandle result{};
+                result.tex = std::move(texture);
+                result.hdl = bindings.bindless->AllocateTexture(result.tex->GetView(), sampler);
+                return result;
+            };
+            bindings.input = bind(textures.input);
+            bindings.output.tex = textures.output;
+            bindings.edges = bind(graph.GetPhysicalTexture(texture_1));
+            if (smaa) {
+                bindings.weights = bind(graph.GetPhysicalTexture(texture_2));
+                bindings.area = bind(smaa_area_tex.tex).hdl;
+                bindings.search = bind(smaa_search_tex.tex).hdl;
+            }
+            if (temporal) {
+                bindings.current = bind(textures.history[smaa_phase]);
+                bindings.previous = history_valid ? bind(textures.history[smaa_phase ^ 1u]) : bindings.current;
+                bindings.depth = bind(
+                    textures.depth,
+                    {SF_LINEAR, SAM_CLAMP_TO_EDGE}
+                ).hdl;
+            } else {
+                bindings.current = bindings.output;
+                bindings.previous = bindings.output;
+            }
+            *prepared = Prepare(ui_config, camera, smaa_phase, bindings);
+            commands.UpdateBindlessArray(bindings.bindless);
+        },
+        RenderGraph::PassRecordPolicy::Serial
+    );
+    if (!smaa && inspect_weights) {
+        graph.AddRecordPass(
+            "AA.ClearUnusedWeights",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Write(texture_2, State::TransferDestination);
+            },
+            [&graph, texture_2](CommandList& commands) {
+                commands.ClearResource(graph.GetPhysicalTexture(texture_2)->GetView(), float4(0.f));
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+    }
     graph.AddRecordPass(
         smaa ? "AA.Edges" : "AA.Luma",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
+                .Read(bindings_token)
                 .Read(resources.input, State::Sampled)
                 .Write(texture_1, State::ColorAttachment);
             if (temporal) {
@@ -861,35 +939,35 @@ void AaPass::AddToGraph(
             }
         },
         [this, prepared](CommandList& commands) {
-            RecordEdgesOrLuma(commands, prepared.Get());
+            RecordEdgesOrLuma(commands, *prepared);
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
     );
-    RenderGraph::TextureHandle texture_2{};
     if (smaa) {
-        texture_2 = import("AA.weights", context.textures.aa_texture_2);
-        const auto area = import("AA.area", smaa_area_tex);
-        const auto search = import("AA.search", smaa_search_tex);
+        const auto area = import("AA.area", smaa_area_tex.tex);
+        const auto search = import("AA.search", smaa_search_tex.tex);
         graph.AddRecordPass(
             "AA.Weights",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
+                    .Read(bindings_token)
                     .Read(texture_1, State::Sampled)
                     .Read(area, State::Sampled)
                     .Read(search, State::Sampled)
                     .Write(texture_2, State::ColorAttachment);
             },
             [this, prepared](CommandList& commands) {
-                RecordWeights(commands, prepared.Get());
+                RecordWeights(commands, *prepared);
             },
             RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     }
-    const auto blend_output = temporal ? import("AA.current", *aa_texture_34[smaa_phase]) : resources.aa_output;
+    const auto blend_output = temporal ? import("AA.current", textures.history[smaa_phase]) : resources.aa_output;
     graph.AddRecordPass(
         "AA.Blend",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
+                .Read(bindings_token)
                 .Read(texture_1, State::Sampled)
                 .Write(blend_output, State::ColorAttachment);
             if (smaa) {
@@ -897,28 +975,30 @@ void AaPass::AddToGraph(
             }
         },
         [this, prepared](CommandList& commands) {
-            RecordBlend(commands, prepared.Get());
+            RecordBlend(commands, *prepared);
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     if (temporal) {
         // An invalid history samples the current output, exactly as Prepare's shader handle does.
-        const auto previous = history_valid ? import("AA.previous", *aa_texture_34[smaa_phase ^ 1u]) : blend_output;
+        const auto previous = history_valid ? import("AA.previous", textures.history[smaa_phase ^ 1u]) : blend_output;
         graph.AddRecordPass(
             "AA.Resolve",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
+                    .Read(bindings_token)
                     .Read(blend_output, State::Sampled)
                     .Read(previous, State::Sampled)
                     .Read(texture_1, State::Sampled)
                     .Write(resources.aa_output, State::ColorAttachment);
             },
             [this, prepared](CommandList& commands) {
-                RecordResolve(commands, prepared.Get());
+                RecordResolve(commands, *prepared);
             },
             RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     }
+    return {.edges = texture_1, .weights = texture_2};
 }
 
 BloomPass::GraphResources BloomPass::AddToGraph(
@@ -1135,53 +1215,9 @@ void UiCombinePass::AddToGraph(
     float2 scene_color_position,
     float2 scene_color_resolution,
     TextureView window_framebuffer,
-    TextureView selected_framebuffer,
-    TextureView default_output,
-    TextureView processing_input,
     GraphResources resources
 ) {
     MOER_PROFILE_SCOPE("Raster.AddToGraph.UiCombinePass");
-    struct PrepareInput {
-        bool        is_separate_window{};
-        uint2       resolution{};
-        float2      scene_color_position{};
-        float2      scene_color_resolution{};
-        TextureView window_framebuffer{};
-        TextureView input_color{};
-        TextureView default_output{};
-    };
-
-    PrepareInput input{
-        .is_separate_window = ui_enabled ? is_separate_window : true,
-        .resolution = resolution,
-        .scene_color_position = ui_enabled ? scene_color_position : float2(0.f, 0.f),
-        .scene_color_resolution = ui_enabled ?
-            scene_color_resolution :
-            float2(static_cast<float>(resolution.x), static_cast<float>(resolution.y)),
-        .window_framebuffer = ui_enabled ? window_framebuffer : default_output,
-        .input_color = ui_enabled ? selected_framebuffer : processing_input,
-        .default_output = default_output
-    };
-
-    auto prepared = graph.AddSetupPass(
-        "UiCombine.Prepare",
-        std::move(input),
-        [this](const PrepareInput& setup) {
-            return Prepare(
-                setup.is_separate_window,
-                setup.resolution,
-                setup.scene_color_position,
-                setup.scene_color_resolution,
-                setup.window_framebuffer,
-                setup.input_color,
-                setup.default_output
-            );
-        }
-    );
-    if (!prepared.IsValid()) {
-        return;
-    }
-
     graph.AddRecordPass(
         "UiCombine",
         [resources, ui_enabled, writes_external_window](RenderGraph::PassBuilder& builder) {
@@ -1197,9 +1233,21 @@ void UiCombinePass::AddToGraph(
             }
             builder.SideEffect();
         },
-        [this, prepared](CommandList& cmd_list) {
+        [=, this, &graph](CommandList& cmd_list) {
             Raster::RecordWithPassMarker(cmd_list, "UiCombine", [&] {
-                Record(cmd_list, prepared.Get());
+                const TextureView output(graph.GetPhysicalTexture(resources.output));
+                const TextureView input(graph.GetPhysicalTexture(
+                    ui_enabled ? resources.selected_framebuffer : resources.processing_input
+                ));
+                Record(cmd_list, Prepare(
+                    ui_enabled ? is_separate_window : true,
+                    resolution,
+                    ui_enabled ? scene_color_position : float2(0.f),
+                    ui_enabled ? scene_color_resolution : float2(resolution.x, resolution.y),
+                    ui_enabled ? window_framebuffer : output,
+                    input,
+                    output
+                ));
             });
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed

@@ -286,12 +286,13 @@ public:
         hiz_data.mip_count        = textures.hiz_previous.tex ? textures.hiz_previous.tex->GetNumMips() : 0;
     }
 
-    Array<TextureView> GetDisplayableFrameBuffersView() {
-        return textures.GetDisplayableFrameBuffersView();
+    Array<std::string> GetDisplayableFrameBufferNames() {
+        return textures.GetDisplayableFrameBufferNames();
     }
 
-    TextureView GetSelectedFrameBufferView(uint32 selected_frame_buffer_index) {
-        return textures.GetDisplayableFrameBuffersView()[selected_frame_buffer_index];
+    std::string GetSelectedFrameBufferName(uint32 selected_frame_buffer_index) {
+        const auto names = GetDisplayableFrameBufferNames();
+        return names.at(std::min<size_t>(selected_frame_buffer_index, names.size() - 1));
     }
 };
 
