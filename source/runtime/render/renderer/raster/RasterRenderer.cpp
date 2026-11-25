@@ -1044,7 +1044,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             gaussian_parameters = m_gaussian_splat_pass->Prepare(render_scene->GetGaussianGpuScene(), camera,
                 raster_context.GetResolution(), frame_packet.active_viewport_mode == EEditorViewportMode::Scene,
                 frame_packet.gaussian_view_settings,
-                TextureRef(raster_context.textures.depth_nearest_sampler.tex->GetView().GetTexture()), needs_reference);
+                {}, needs_reference);
         }
         gaussian_parameters.shadow_data =
             has_meshes ? shadow_depth_pass->GetGaussianShadowData() : BufferRef{};
@@ -1146,14 +1146,25 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 graph_resources.base_color = scene_target("base_color", RasterTextures::BaseColorFormat, raster_context.textures.base_color.tex);
                 graph_resources.normal = scene_target("normal", RasterTextures::NormalFormat, raster_context.textures.normal.tex);
                 graph_resources.metal_rough_ao = scene_target("metal_rough_ao", RasterTextures::MaterialFormat, raster_context.textures.metal_rough_ao.tex);
-                graph_resources.depth =
-                    import_texture("depth", raster_context.textures.depth_linear_sampler.tex);
-                graph_resources.noise = import_texture("noise", raster_context.textures.noise_tex.tex);
-                graph_resources.cubemap = import_texture("cubemap", raster_context.textures.cubemap_tex.tex);
+#if WITH_CUDA
+                graph_resources.depth = import_texture("depth", raster_context.textures.depth_linear_sampler.tex);
                 const auto depth_nearest_alias = import_texture(
                     "depth_nearest_sampler", raster_context.textures.depth_nearest_sampler.tex
                 );
                 assert(depth_nearest_alias == graph_resources.depth);
+#else
+                graph_resources.depth = graph.CreateTransientTexture("depth", RGTransientTextureDesc{
+                    .extent = Extent3D(scene_resolution.x, scene_resolution.y, 1),
+                    .format = RasterTextures::DepthFormat,
+                    .usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT |
+                             ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST,
+                    .aspect_flags = ETextureAspectFlags::DEPTH_SLICE
+                });
+#endif
+                if (selected_framebuffer_name == "depth_linear_sampler" || selected_framebuffer_name == "depth_nearest_sampler")
+                    graph_resources.selected_framebuffer = graph_resources.depth;
+                graph_resources.noise = import_texture("noise", raster_context.textures.noise_tex.tex);
+                graph_resources.cubemap = import_texture("cubemap", raster_context.textures.cubemap_tex.tex);
                 graph_resources.hiz_current =
                     import_texture("hiz_current", raster_context.textures.hiz_current.tex);
                 graph_resources.hiz_previous =

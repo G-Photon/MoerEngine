@@ -14,7 +14,7 @@ SkyboxPass::SkyboxPass(RasterContext& context) {
         {},
         {RHIColorAttachmentInfo::Preset(RasterTextures::LightingOutputFormat)},
         depth_stencil_info,
-        context.textures.depth_linear_sampler.tex->GetFormat()
+        RasterTextures::DepthFormat
     );
 
     skybox_pipeline = context.manager.Raster()
@@ -44,7 +44,6 @@ SkyboxPass::RecordParameters SkyboxPass::Prepare(
 
     parameters.bindless      = context.bdls;
     parameters.cubemap_owner = context.textures.cubemap_tex.tex;
-    parameters.depth_owner   = context.textures.depth_linear_sampler.tex;
     const auto size = context.GetResolution();
     parameters.render_area   = Rect2D(0, 0, size.x, size.y);
     return parameters;

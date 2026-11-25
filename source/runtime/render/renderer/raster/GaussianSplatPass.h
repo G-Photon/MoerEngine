@@ -92,7 +92,8 @@ private:
         RenderGraph& graph, const GaussianGpuScene* scene, const Camera& camera, uint2 resolution,
         bool is_editor_view, bool is_invalid_scene, GaussianViewSettings settings,
         TextureRef opaque_depth, bool is_engine_view, bool needs_reference,
-        BufferRef shadow_data, BindlessArrayRef shadow_bindless, Array<TextureRef> shadow_maps
+        BufferRef shadow_data, BindlessArrayRef shadow_bindless, Array<TextureRef> shadow_maps,
+        RenderGraph::TextureHandle depth_resource = {}
     );
     struct Impl;
     std::unique_ptr<Impl> m_impl;

@@ -175,7 +175,7 @@ public:
 
         FillHiZOcclusionParams(context, options, params, data);
 
-        const float viewport_height = static_cast<float>(context.textures.depth_linear_sampler.GetSize().y);
+        const float viewport_height = static_cast<float>(context.GetResolution().y);
         FillClusterLodParams(camera, gpu_scene_res, options, viewport_height, params, data);
 
         return Prepare(

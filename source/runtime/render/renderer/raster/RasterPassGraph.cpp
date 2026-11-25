@@ -317,6 +317,7 @@ RenderGraph::PassHandle GeometryPass::AddToGraph(
             resolved.base_color = graph.GetPhysicalTexture(resources.base_color);
             resolved.normal = graph.GetPhysicalTexture(resources.normal);
             resolved.metal_rough_ao = graph.GetPhysicalTexture(resources.metal_rough_ao);
+            resolved.depth = graph.GetPhysicalTexture(resources.depth);
             RecordDraw(commands, resolved);
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
@@ -372,6 +373,7 @@ void TessellatedSurfacePass::AddToGraph(
                 resolved.base_color.tex = graph.GetPhysicalTexture(resources.base_color);
                 resolved.normal.tex = graph.GetPhysicalTexture(resources.normal);
                 resolved.metal_rough_ao.tex = graph.GetPhysicalTexture(resources.metal_rough_ao);
+                resolved.depth = graph.GetPhysicalTexture(resources.depth)->GetView();
                 RecordDraw(cmd_list, resolved);
             });
         },
@@ -385,18 +387,12 @@ void HiZBuildPass::AddToGraph(
     GraphResources resources
 ) {
     MOER_PROFILE_SCOPE("Raster.AddToGraph.HiZBuildPass");
-    auto prepared = graph.AddSetupPass(
-        "HiZBuild.Prepare",
-        uint8{0},
-        [this, &context](const uint8&) {
-            return Prepare(context);
-        }
-    );
-    if (!prepared.IsValid()) {
-        return;
-    }
+    AddToGraph(graph, Prepare(context.textures.hiz_current.tex), resources);
+}
 
-    for (uint32 mip = 0; mip < context.textures.hiz_current.tex->GetNumMips(); ++mip) {
+void HiZBuildPass::AddToGraph(RenderGraph& graph, RecordParameters parameters, GraphResources resources) {
+    const auto prepared = std::make_shared<const RecordParameters>(std::move(parameters));
+    for (uint32 mip = 0; mip < prepared->dispatches.size(); ++mip) {
         graph.AddRecordPass(
             std::format("HiZBuild.Mip{}", mip),
             [=](RenderGraph::PassBuilder& builder) {
@@ -404,8 +400,13 @@ void HiZBuildPass::AddToGraph(
                     .Read(mip == 0 ? resources.depth : resources.hiz_current, RenderGraph::TextureAccessType::Sampled, RenderGraph::TextureRange::Mips(mip == 0 ? 0 : mip - 1, 1))
                     .Write(resources.hiz_current, RenderGraph::TextureAccessType::Storage, RenderGraph::TextureRange::Mips(mip, 1));
             },
-            [this, prepared, mip](CommandList& cmd_list) {
-                RecordMip(cmd_list, prepared.Get(), mip);
+            [this, prepared, resources, mip, &graph](CommandList& cmd_list) {
+                auto resolved = *prepared;
+                if (mip == 0) {
+                    resolved.source_owner = graph.GetPhysicalTexture(resources.depth);
+                    resolved.dispatches[0].source = resolved.source_owner->GetView();
+                }
+                RecordMip(cmd_list, resolved, mip);
             },
             RenderGraph::PassRecordPolicy::ParallelAllowed
         );
@@ -561,16 +562,19 @@ void SkyboxPass::AddToGraph(
         [resources, clear_depth](RenderGraph::PassBuilder& builder) {
             // Skybox disables depth writes, but the attachment STORE operation
             // still writes memory at the end of rendering.
-            builder.ReadWrite(resources.depth, RenderGraph::TextureAccessType::DepthStencilAttachment)
-                .Read(resources.cubemap, RenderGraph::TextureAccessType::Sampled);
-            if (clear_depth)
+            builder.Read(resources.cubemap, RenderGraph::TextureAccessType::Sampled);
+            if (clear_depth) {
+                builder.Write(resources.depth, RenderGraph::TextureAccessType::DepthStencilAttachment);
                 builder.Write(resources.lighting_output, RenderGraph::TextureAccessType::ColorAttachment);
-            else
+            } else {
+                builder.ReadWrite(resources.depth, RenderGraph::TextureAccessType::DepthStencilAttachment);
                 builder.ReadWrite(resources.lighting_output, RenderGraph::TextureAccessType::ColorAttachment);
+            }
         },
         [this, prepared, resources, &graph](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "Skybox", [&] {
                 auto resolved = prepared.Get();
+                resolved.depth_owner = graph.GetPhysicalTexture(resources.depth);
                 resolved.output = graph.GetPhysicalTexture(resources.lighting_output);
                 Record(cmd_list, resolved);
             });
@@ -927,7 +931,6 @@ AaPass::GraphResult AaPass::AddToGraph(
     MOER_PROFILE_SCOPE("Raster.AddToGraph.AaPass");
     return AddRecordPasses(graph, ui_config, camera, {
         .extent = Extent2D(context.GetResolution()),
-        .depth = context.textures.depth_linear_sampler.tex->CastToTextureRef(),
         .history = {context.textures.aa_texture_3.tex, context.textures.aa_texture_4.tex}
     }, smaa_phase, resources, inspect_weights);
 }
@@ -946,7 +949,7 @@ AaPass::GraphResult AaPass::AddRecordPasses(
         throw std::invalid_argument("AA requires input/output handles, extent and a valid temporal phase");
     }
     if (ui_config.aa_mode == EAaMode::SMAA_T2X &&
-        (!textures.depth || !textures.history[0] || !textures.history[1])) {
+        (!resources.depth.IsValid() || !textures.history[0] || !textures.history[1])) {
         throw std::invalid_argument("SMAA T2x requires depth and both persistent history images");
     }
     using State       = RenderGraph::TextureAccessType;
@@ -994,7 +997,7 @@ AaPass::GraphResult AaPass::AddRecordPasses(
                 bindings.current = bind(textures.history[smaa_phase]);
                 bindings.previous = history_valid ? bind(textures.history[smaa_phase ^ 1u]) : bindings.current;
                 bindings.depth = bind(
-                    textures.depth,
+                    graph.GetPhysicalTexture(resources.depth),
                     {SF_LINEAR, SAM_CLAMP_TO_EDGE}
                 ).hdl;
             } else {

@@ -22,7 +22,7 @@ GaussianShadowPass::GaussianShadowPass(RasterContext& context) :
     GaussianShadowPass(
         context.manager,
         context.bdls,
-        context.textures.depth_linear_sampler.tex->GetFormat()
+        RasterTextures::DepthFormat
     ) {}
 GaussianShadowPass::GaussianShadowPass(
     ShaderManager&   manager,
@@ -170,13 +170,13 @@ void GaussianShadowPass::EnsureResources(RasterContext& context, const RasterCon
                             TextureRef(context.device.CreateCubeMap(
                                 "Gaussian point shadow",
                                 Extent2D(uint32(config.shadow_csm_sm_size), uint32(config.shadow_csm_sm_size)),
-                                context.textures.depth_linear_sampler.tex->GetFormat(),
+                                RasterTextures::DepthFormat,
                                 usage
                             )) :
                             context.device.CreateTexture(
                                 "Gaussian cascade shadow",
                                 Extent3D(uint32(config.shadow_csm_sm_size), uint32(config.shadow_csm_sm_size), 1),
-                                context.textures.depth_linear_sampler.tex->GetFormat(),
+                                RasterTextures::DepthFormat,
                                 usage
                             );
             InitializeGraphicsTexture(m_maps[i]);

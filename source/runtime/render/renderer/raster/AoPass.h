@@ -241,7 +241,7 @@ public:
             param.ray_trace_distance    = ui_config.rtao_ray_trace_distance;
             param.intensity             = ui_config.rtao_intensity;
             param.depth_tex_resolution =
-                float2(context.textures.depth_nearest_sampler.GetSize());
+                float2(context.GetResolution());
             if (context.rt_scene()) {
                 parameters.tlas = context.rt_scene()->GetTlas();
             }

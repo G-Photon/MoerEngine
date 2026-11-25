@@ -49,13 +49,13 @@ namespace Moer::Render::Raster {
     X(DepthBufferWithHandle,                                                                                    \
       depth_linear_sampler,                                                                                     \
       TexDepthTag,                                                                                              \
-      TexConfig::Default(WITH_CUDA ? PF_D32_SFLOAT : PF_D32_SFLOAT_S8_UINT)                                     \
+      TexConfig::Default(DepthFormat).GraphTransient(!WITH_CUDA)                                               \
           .Usage(E_S_DEPTH)                                                                                     \
           .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE))                                                         \
     X(DepthBufferWithHandle,                                                                                    \
       depth_nearest_sampler,                                                                                    \
       TexDepthTag,                                                                                              \
-      TexConfig::Default(WITH_CUDA ? PF_D32_SFLOAT : PF_D32_SFLOAT_S8_UINT)                                     \
+      TexConfig::Default(DepthFormat).GraphTransient(!WITH_CUDA)                                               \
           .Usage(E_S_DEPTH)                                                                                     \
           .SamplerConfig(SF_NEAREST, SAM_CLAMP_TO_EDGE)                                                         \
           .From(depth_linear_sampler))                                                                          \
@@ -119,6 +119,7 @@ namespace Moer::Render::Raster {
           .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS).GraphTransient(!WITH_CUDA))
 
 struct RasterTextures {
+    static constexpr EPixelFormat DepthFormat = WITH_CUDA ? PF_D32_SFLOAT : PF_D32_SFLOAT_S8_UINT;
     static constexpr EPixelFormat BaseColorFormat = PF_R8G8B8A8_UNORM;
     static constexpr EPixelFormat NormalFormat = PF_A2B10G10R10_UNORM_PACK32;
     static constexpr EPixelFormat MaterialFormat = PF_R8G8B8A8_UNORM;

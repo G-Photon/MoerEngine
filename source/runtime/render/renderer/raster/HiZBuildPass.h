@@ -21,7 +21,7 @@ public:
     DEFINE_SHADER_ARGS(param, src_texture, dst_texture);
 };
 
-class HiZBuildPass {
+class RENDER_API HiZBuildPass {
 public:
     struct GraphResources {
         RenderGraph::TextureHandle depth{};
@@ -42,7 +42,7 @@ public:
      * and previous images on the render thread.
      */
     struct RecordParameters {
-        DepthBufferRef     source_owner{};
+        TextureRef         source_owner{};
         TextureRef         destination_owner{};
         Array<MipDispatch> dispatches{};
 
@@ -51,30 +51,30 @@ public:
         }
     };
 
-    HiZBuildPass(RasterContext& context) {
-        pipeline = context.manager.Compute<HiZBuildPipeline>(
+    explicit HiZBuildPass(RasterContext& context) : HiZBuildPass(context.manager) {}
+
+    explicit HiZBuildPass(ShaderManager& manager) {
+        pipeline = manager.Compute<HiZBuildPipeline>(
             "pipelines/raster/culling/HiZBuild.comp.hlsl"
         );
     }
 
-    [[nodiscard]] RecordParameters Prepare(const RasterContext& context) const {
+    [[nodiscard]] RecordParameters Prepare(const TextureRef& destination) const {
         RecordParameters parameters{};
-        if (context.textures.hiz_current.tex == nullptr) {
+        if (!destination) {
             return parameters;
         }
 
-        const uint32 mip_count = context.textures.hiz_current.tex->GetNumMips();
+        const uint32 mip_count = destination->GetNumMips();
         if (mip_count == 0) {
             return parameters;
         }
 
-        parameters.source_owner      = context.textures.depth_nearest_sampler.tex;
-        parameters.destination_owner = context.textures.hiz_current.tex;
+        parameters.destination_owner = destination;
         parameters.dispatches.reserve(mip_count);
 
-        const uint2 mip0_size = context.textures.hiz_current.GetSize(0);
+        const uint2 mip0_size(destination->GetWidth(), destination->GetHeight());
         parameters.dispatches.emplace_back(MipDispatch{
-            .source           = parameters.source_owner->GetView(),
             .destination      = parameters.destination_owner->GetView(0, 1),
             .source_size      = mip0_size,
             .destination_size = mip0_size,
@@ -85,8 +85,8 @@ public:
             parameters.dispatches.emplace_back(MipDispatch{
                 .source = parameters.destination_owner->GetView(static_cast<uint8>(mip - 1), 1),
                 .destination = parameters.destination_owner->GetView(static_cast<uint8>(mip), 1),
-                .source_size = context.textures.hiz_current.GetSize(mip - 1),
-                .destination_size = context.textures.hiz_current.GetSize(mip),
+                .source_size = uint2(std::max(1u, mip0_size.x >> (mip - 1)), std::max(1u, mip0_size.y >> (mip - 1))),
+                .destination_size = uint2(std::max(1u, mip0_size.x >> mip), std::max(1u, mip0_size.y >> mip)),
                 .is_mip0 = false,
             });
         }
@@ -103,17 +103,12 @@ public:
             .Dispatch(uint3((param.dst_size.x + 7) / 8, (param.dst_size.y + 7) / 8, 1), "Build Hi-Z");
     }
 
-    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
-        for (uint32 mip = 0; mip < parameters.dispatches.size(); ++mip) {
-            RecordMip(cmd_list, parameters, mip);
-        }
-    }
-
     void AddToGraph(
         RenderGraph& graph,
         const RasterContext& context,
         GraphResources resources
     );
+    void AddToGraph(RenderGraph& graph, RecordParameters parameters, GraphResources resources);
 
 private:
     HiZBuildPipeline pipeline;

@@ -84,7 +84,7 @@ TessellatedSurfacePass::TessellatedSurfacePass(RasterContext& context) {
             RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM)
         },
         RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(),
-        context.textures.depth_linear_sampler.tex->GetFormat(),
+        RasterTextures::DepthFormat,
         EPrimitiveTopology::PATCH_LIST
     );
     pipeline_info.patch_control_points = 3;
@@ -192,7 +192,6 @@ TessellatedSurfacePass::RecordParameters TessellatedSurfacePass::Prepare(
 
     parameters.enabled        = true;
     parameters.surface_data   = surface_data_buffer;
-    parameters.depth          = context.textures.depth_linear_sampler.tex->GetView();
     const auto size = context.GetResolution();
     parameters.render_area    = Rect2D(0, 0, size.x, size.y);
     parameters.instance_count = grid_resolution * grid_resolution;

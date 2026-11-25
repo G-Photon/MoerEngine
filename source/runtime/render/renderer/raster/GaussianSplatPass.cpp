@@ -215,6 +215,10 @@ struct GaussianFrameTimings {
     bool recorded = false;
 };
 
+struct GaussianGraphTexture {
+    RenderGraph::TextureHandle resource{};
+};
+
 // Each dispatch is a graph node. The access masks above describe the Gaussian
 // shader interfaces, rather than inspecting recorded RHI commands for hazards.
 class GaussianStageGraph {
@@ -327,10 +331,18 @@ private:
     void Collect(Accesses& accesses, const Argument& argument, RenderGraph::AccessMode mode) {
         if constexpr (std::is_same_v<Argument, BufferView>) accesses.buffers.emplace_back(Buffer(argument.GetBuffer()), mode);
         else if constexpr (std::is_same_v<Argument, TextureView>) accesses.textures.emplace_back(Texture(argument.GetTexture()), mode);
+        else if constexpr (std::is_same_v<Argument, GaussianGraphTexture>) accesses.textures.emplace_back(argument.resource, mode);
         else if constexpr (std::is_same_v<Argument, BindlessArrayRef>) {
             accesses.publications.push_back(graph.ImportToken("Raster.bindless", argument.Get()));
             for (const auto& texture : candidates) if (texture) accesses.textures.emplace_back(Texture(texture.Get()), RenderGraph::AccessMode::Read);
         }
+    }
+    template<class Argument>
+    static auto Resolve(RenderGraph& graph, const Argument& argument) {
+        if constexpr (std::is_same_v<Argument, GaussianGraphTexture>)
+            return graph.GetPhysicalTexture(argument.resource)->GetView();
+        else
+            return argument;
     }
     template<class Pipeline, class Tuple, size_t... Indices>
     void ComputeStage(Pipeline* pipeline, Tuple arguments, uint3 groups, std::string_view name, std::index_sequence<Indices...>) {
@@ -341,8 +353,8 @@ private:
         const uint32 category = std::is_same_v<Pipeline, GaussianReceiveShadowPipeline> ? 3u : stage;
         Add(name, RenderGraph::GpuWorkType::Compute,
             [accesses = std::move(accesses)](RenderGraph::PassBuilder& builder) { accesses.Declare(builder); },
-            [pipeline, arguments = std::move(arguments), groups, name = std::string(name)](CommandList& commands) {
-                std::apply([&](const auto&... args) { commands.Compute(*pipeline, args...).Dispatch(groups, name); }, arguments);
+            [pipeline, arguments = std::move(arguments), groups, name = std::string(name), graph = &graph](CommandList& commands) {
+                std::apply([&](const auto&... args) { commands.Compute(*pipeline, Resolve(*graph, args)...).Dispatch(groups, name); }, arguments);
             }, true, category);
     }
     void Add(std::string_view name, RenderGraph::GpuWorkType work,
@@ -574,7 +586,8 @@ RenderGraph::PassHandle GaussianSplatPass::AddAccumulationToGraph(
     RenderGraph& graph, const GaussianGpuScene* scene, const Camera& camera, uint2 resolution,
     bool is_editor_view, bool is_invalid_scene, GaussianViewSettings view_settings,
     TextureRef opaque_depth, bool is_engine_view, bool needs_reference,
-    BufferRef shadow_data, BindlessArrayRef shadow_bindless, Array<TextureRef> shadow_maps
+    BufferRef shadow_data, BindlessArrayRef shadow_bindless, Array<TextureRef> shadow_maps,
+    RenderGraph::TextureHandle depth_resource
 ) {
     auto& state = *m_impl;
     state.Poll();
@@ -628,8 +641,11 @@ RenderGraph::PassHandle GaussianSplatPass::AddAccumulationToGraph(
         );
         InitializeGraphicsTexture(state.m_reference);
     }
-    if (!opaque_depth)
+    const bool has_opaque_depth = depth_resource.IsValid() || bool(opaque_depth);
+    if (!has_opaque_depth)
         commands.ClearResource(state.m_empty_depth->GetView(), float4(0));
+    if (!depth_resource.IsValid())
+        depth_resource = ImportRasterTexture(graph, "Gaussian.depth", opaque_depth ? opaque_depth.Get() : state.m_empty_depth.Get());
     // Commands retain descriptor resources through translation. Keep owners explicitly until
     // GPU completion too: camera uploads, resize and instance replacement can overlap frames.
     Array<BufferRef> buffer_owners{
@@ -849,7 +865,7 @@ RenderGraph::PassHandle GaussianSplatPass::AddAccumulationToGraph(
     param.job = uint4(
         uint(is_engine_view),
         uint(needs_reference),
-        uint(bool(opaque_depth)),
+        uint(has_opaque_depth),
         (std::bit_cast<uint>(view_settings.shadow_receive_strength) & 0x7fffffffu) |
             (view_settings.debug_view == EGaussianDebugView::ShadowVisibility ? 0x80000000u : 0u)
     );
@@ -864,7 +880,7 @@ RenderGraph::PassHandle GaussianSplatPass::AddAccumulationToGraph(
             state.m_status->GetView(),
             state.m_color->GetView(),
             state.m_transmittance->GetView(),
-            opaque_depth ? opaque_depth->GetView() : state.m_empty_depth->GetView(),
+            GaussianGraphTexture{depth_resource},
             state.m_reference->GetView()
         )
         .Dispatch(uint3(camera_data->viewport.z, camera_data->viewport.w, 1), "Gaussian splat");
@@ -1012,12 +1028,12 @@ RenderGraph::PassHandle GaussianSplatPass::AddToGraph(
     RenderGraph& graph, RecordParameters parameters, GraphResources resources,
     RenderGraph::TextureHandle opaque_depth, RenderGraph::TokenHandle shadow_maps
 ) {
-    // Physical imports alias by identity. Stage declarations include the actual
-    // depth and shadow textures, not only their legacy logical ordering token.
+    // Depth can be transient: declare its logical handle now and resolve it in
+    // the splat recording callback, after the graph allocates physical images.
     auto last = AddAccumulationToGraph(graph, parameters.scene, parameters.camera, parameters.resolution,
         parameters.is_editor_view, false, parameters.settings, parameters.opaque_depth,
         parameters.is_engine_view, parameters.needs_reference, parameters.shadow_data,
-        parameters.shadow_bindless, parameters.shadow_maps);
+        parameters.shadow_bindless, parameters.shadow_maps, opaque_depth);
     if (parameters.needs_reference) {
         GaussianStageGraph stages(graph, "Gaussian.Display");
         GaussianDispatchParams param{};

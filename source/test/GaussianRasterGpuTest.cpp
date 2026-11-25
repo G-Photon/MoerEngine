@@ -5,6 +5,8 @@
 #include "renderer/raster/GaussianCompositePass.h"
 #include "renderer/raster/GaussianShadowPass.h"
 #include "renderer/raster/RasterGraphResourceAccess.h"
+#include "renderer/raster/RasterTextures.h"
+#include "renderer/raster/RasterTool.h"
 #include "rendergraph/RenderGraphUpload.h"
 #include "scene/RenderScene.h"
 #include "scene/Scene.h"
@@ -28,6 +30,13 @@
 using namespace Moer;
 using namespace Moer::Render;
 namespace {
+class HybridDepthPipeline : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(HybridDepthPipeline);
+    DEFINE_SHADER_BUFFER(depth_values);
+    DEFINE_SHADER_ARGS(depth_values);
+};
+
 class GaussianShadowQueryPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(GaussianShadowQueryPipeline);
@@ -646,8 +655,11 @@ void RunHybrid(
     bool           cube_shadow      = false,
     bool           debug_visibility = false,
     bool           is_gaussian_only = false,
-    float          exposure_ev      = 1.f
+    float          exposure_ev      = 1.f,
+    bool           transient_depth  = false,
+    bool           parallel         = true
 ) {
+    Require(!transient_depth || use_graph, "Transient hybrid depth requires a graph");
     constexpr uint width = 65, height = 49;
     Camera         camera;
     camera.Initialize(float3(0), -90, 0, 60, float(width) / height, .01f, 100.f);
@@ -674,7 +686,8 @@ void RunHybrid(
     auto&      device = RenderDevice::Get();
     const auto usage =
         ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC;
-    auto depth = device.CreateTexture("Hybrid test depth", Extent3D(width, height, 1), PF_R32_SFLOAT, usage);
+    auto depth = transient_depth ? TextureRef{} :
+        device.CreateTexture("Hybrid test depth", Extent3D(width, height, 1), PF_R32_SFLOAT, usage);
     auto mesh  = device.CreateTexture(
         "Hybrid test mesh color", Extent3D(width, height, 1), PF_R32G32B32A32_SFLOAT, usage
     );
@@ -698,9 +711,19 @@ void RunHybrid(
     auto                          bindless = device.CreateBindlessArray();
     Raster::GaussianSplatPass     splats(manager, {.tile_pair_capacity = 1024});
     Raster::GaussianCompositePass composite(manager, bindless);
+    RenderGraphResourcePool       pool;
+    RenderGraphTransientAllocator allocator(pool);
     CommandList                   commands(EQueueType::Graphics);
     scene.ApplyUpdate(snapshot, commands);
-    RecordNewGraphicsTextureUpload(commands, std::as_bytes(std::span(depths)), depth->GetView());
+    BufferRef depth_values;
+    if (transient_depth) {
+        depths.insert(depths.begin(), float(width));
+        depth_values = device.CreateBuffer<float>("Hybrid depth pattern", depths.size(),
+            EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
+        RecordGraphicsBufferUpload(commands, std::as_bytes(std::span(depths)), depth_values->GetView());
+    } else {
+        RecordNewGraphicsTextureUpload(commands, std::as_bytes(std::span(depths)), depth->GetView());
+    }
     RecordNewGraphicsTextureUpload(commands, std::as_bytes(std::span(mesh_pixels)), mesh->GetView());
     GaussianViewSettings settings;
     settings.exposure_ev       = exposure_ev;
@@ -767,7 +790,24 @@ void RunHybrid(
     if (use_graph) {
         RenderGraph graph("HybridContract", RenderGraph::QueueTopology::FromRHI());
         auto        resources      = splats.ImportGraphResources(graph);
-        auto        depth_resource = Raster::ImportRasterTexture(graph, "mesh_depth", depth.Get());
+        auto        depth_resource = transient_depth ? graph.CreateTransientTexture("mesh_depth", RGTransientTextureDesc{
+            .extent = Extent3D(width, height, 1), .format = Raster::RasterTextures::DepthFormat,
+            .usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+            .aspect_flags = ETextureAspectFlags::DEPTH_SLICE
+        }) : Raster::ImportRasterTexture(graph, "mesh_depth", depth.Get());
+        if (transient_depth) {
+            const auto samples = Raster::ImportRasterBuffer(graph, "depth_values", depth_values.Get());
+            auto pipeline = std::make_shared<HybridDepthPipeline>(manager.Raster().Vertex("core/utils/FullScreenQuad.hlsl").Pixel("test/DepthTransient.frag.hlsl")
+                .Build<HybridDepthPipeline>(GfxPsoCreateInfo(RHIRasterizeInfo::Preset(), {}, {},
+                    RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(), Raster::RasterTextures::DepthFormat)));
+            graph.AddRecordPass("Hybrid.DepthAttachment", [=](RenderGraph::PassBuilder& builder) {
+                builder.Read(samples, RenderGraph::BufferAccessType::ShaderRead)
+                    .Write(depth_resource, RenderGraph::TextureAccessType::DepthStencilAttachment);
+            }, [&, pipeline, depth_resource](CommandList& list) {
+                list.Gfx(*pipeline, depth_values).Draw("Hybrid depth pattern", Rect2D(0, 0, width, height),
+                    Raster::RasterTool::GetFullScreenDrawDatas(), DepthAttachment(graph.GetPhysicalTexture(depth_resource)->GetView()));
+            }, RenderGraph::PassRecordPolicy::ParallelAllowed);
+        }
         auto        mesh_resource  = Raster::ImportRasterTexture(graph, "mesh_color", mesh.Get());
         auto        output         = Raster::ImportRasterTexture(graph, "composite", merge.output.tex.Get());
         splats.AddToGraph(graph, parameters, resources, depth_resource);
@@ -784,7 +824,7 @@ void RunHybrid(
         commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         if (!graph.Compile())
             throw std::runtime_error("Hybrid graph: " + graph.GetCompileError());
-        Require(graph.RecordAndMergeFrontendCommands(commands, true), "Hybrid graph recording failed");
+        Require(graph.RecordAndMergeFrontendCommands(commands, parallel, {}, &allocator), "Hybrid graph recording failed");
     } else {
         splats.Record(commands, parameters);
         composite.Record(commands, merge);
@@ -872,6 +912,15 @@ void RunHybrid(
                     );
             }
         }
+    if (transient_depth) {
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        Require(pool.TextureCount() == 1 && pool.AvailableTextureCount() == 1,
+            "Hybrid transient depth not returned after completion");
+        std::cout << "[TESTCASE][PASS] TransientDepthHybrid pixels=" << width * height
+                  << " parallel=" << parallel << " gaussian_only=" << is_gaussian_only
+                  << " shadow=" << shadow_strength << " cube=" << cube_shadow
+                  << " debug=" << debug_visibility << " tolerance=0.00003" << std::endl;
+    }
     std::cout << "hybrid depth/source-RGB/composite passed (graph=" << use_graph << ")" << std::endl;
 }
 
@@ -1169,6 +1218,14 @@ int main(int argc, char** argv) {
         RunHybrid(manager, true, .5f, false, true);
         RunHybrid(manager, false, 1.f, true, true);
         RunHybrid(manager, true, .5f, true, true);
+        for (bool parallel : {false, true}) {
+            RunHybrid(manager, true, -1.f, false, false, false, 1.f, true, parallel);
+            RunHybrid(manager, true, -1.f, false, false, true, 1.f, true, parallel);
+            RunHybrid(manager, true, .5f, false, false, false, 1.f, true, parallel);
+            RunHybrid(manager, true, .5f, true, false, false, 1.f, true, parallel);
+            RunHybrid(manager, true, .5f, true, true, false, 1.f, true, parallel);
+        }
+        std::cout << "[TESTCASE][PASS] TransientDepthHybrid: cases=10 pixels=31850 cpu_values=318500 tolerance=0.00003" << std::endl;
         RunInFlightResize(manager);
         RunNarrowReference(manager);
         RunViewSettings(manager);

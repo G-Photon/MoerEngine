@@ -26,7 +26,8 @@ void RunEffectsTransientContracts();
 void RunAoCompositeTransientContracts();
 void RunAoScratchTransientContracts();
 void RunGBufferTransientContracts();
-int RunDisplayTransientScene(int argc, const char** argv, bool effects, bool ao_composite = false, bool ao_scratch = false, bool gbuffer = false);
+void RunDepthTransientContracts();
+int RunDisplayTransientScene(int argc, const char** argv, bool effects, bool ao_composite = false, bool ao_scratch = false, bool gbuffer = false, bool depth = false);
 
 namespace {
 
@@ -50,15 +51,15 @@ std::vector<float> RunNumeric(
     const auto input_texture = device.CreateTexture("AA.TestInput", size, PF_R32G32B32A32_SFLOAT, usage);
     const auto output_texture = transient_output ? TextureRef{} :
         device.CreateTexture("AA.TestOutput", size, PF_R32G32B32A32_SFLOAT, usage);
+    const auto depth_texture = device.CreateTexture("AA.TestDepth", size, PF_R32_SFLOAT, usage);
     AaPass::FrameTextures textures{
         .extent = size,
-        .depth = device.CreateTexture("AA.TestDepth", size, PF_R32_SFLOAT, usage),
         .history = {
             device.CreateTexture("AA.History0", size, PF_R32G32B32A32_SFLOAT, usage),
             device.CreateTexture("AA.History1", size, PF_R32G32B32A32_SFLOAT, usage)
         }
     };
-    InitializeGraphicsTextures(std::array{input_texture, textures.depth,
+    InitializeGraphicsTextures(std::array{input_texture, depth_texture,
                                          textures.history[0], textures.history[1]});
     if (output_texture) InitializeGraphicsTextures(std::array{output_texture});
     const std::vector<float4> pixels = [&] {
@@ -88,7 +89,7 @@ std::vector<float> RunNumeric(
                 .extent = Extent3D(size.x, size.y, 1), .format = PF_R32G32B32A32_SFLOAT, .usage = usage
             };
             const auto input = ImportRasterTexture(graph, "AA.TestInput", input_texture.Get());
-            const auto depth = ImportRasterTexture(graph, "AA.TestDepth", textures.depth.Get());
+            const auto depth = ImportRasterTexture(graph, "AA.TestDepth", depth_texture.Get());
             const auto output = transient_output ? graph.CreateTransientTexture("AA.TestOutput", desc) :
                 ImportRasterTexture(graph, "AA.TestOutput", output_texture.Get());
             graph.AddRecordPass(
@@ -100,7 +101,7 @@ std::vector<float> RunNumeric(
                 },
                 [&](CommandList& commands) {
                     commands.CopyFrom(std::as_bytes(std::span(pixels)), input_texture->GetView());
-                    commands.CopyFrom(std::as_bytes(std::span(depths)), textures.depth->GetView());
+                    commands.CopyFrom(std::as_bytes(std::span(depths)), depth_texture->GetView());
                 },
                 RenderGraph::PassRecordPolicy::ParallelAllowed
             );
@@ -437,6 +438,8 @@ int main(int argc, const char** argv) {
     if (argc > 1 && std::string_view(argv[1]) == "--ao-scratch-scene") return RunDisplayTransientScene(argc, argv, false, false, true);
     if (argc > 1 && std::string_view(argv[1]) == "--gbuffer-scene") return RunDisplayTransientScene(argc, argv, false, false, false, true);
     if (argc > 1 && std::string_view(argv[1]) == "--gbuffer-empty-scene") return RunDisplayTransientScene(argc, argv, false, false, false, true);
+    if (argc > 1 && (std::string_view(argv[1]) == "--depth-scene" || std::string_view(argv[1]) == "--depth-empty-scene"))
+        return RunDisplayTransientScene(argc, argv, false, false, false, false, true);
     bool device_ready = false, tasks_ready = false;
     try {
         LogSystem::Init();
@@ -455,6 +458,8 @@ int main(int argc, const char** argv) {
             RunAoScratchTransientContracts();
         } else if (argc > 1 && std::string_view(argv[1]) == "--gbuffer") {
             RunGBufferTransientContracts();
+        } else if (argc > 1 && std::string_view(argv[1]) == "--depth") {
+            RunDepthTransientContracts();
         } else {
             Numeric();
             TonemappingTransient();

@@ -133,7 +133,6 @@ public:
 
     struct FrameTextures {
         Extent2D extent{};
-        TextureRef depth{};
         std::array<TextureRef, 2> history{};
     };
 

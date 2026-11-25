@@ -53,7 +53,7 @@ public:
         uint32                         draw_command_stride = 0;
         uint32                         max_draw_count      = 0;
         Rect2D                         render_area{};
-        DepthBufferRef                 depth{};
+        TextureRef                     depth{};
         TextureRef                     base_color{};
         TextureRef                     normal{};
         TextureRef                     metal_rough_ao{};
@@ -72,7 +72,7 @@ public:
                 RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM)            // metal_rough_ao
             },
             depth_stencil_info,
-            context.textures.depth_linear_sampler.tex->GetFormat()
+            RasterTextures::DepthFormat
         );
 
         GeometryPassPipeline::MutationSet mutation_set{};
@@ -156,8 +156,7 @@ public:
             .draw_count = visibility.GetDrawCountView(),
             .draw_command_stride = visibility.draw_cmd_buf->GetStride(),
             .max_draw_count = visibility.max_draw_count,
-            .render_area = render_area,
-            .depth = context.textures.depth_linear_sampler.tex
+            .render_area = render_area
         };
     }
 

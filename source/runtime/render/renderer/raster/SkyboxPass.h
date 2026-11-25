@@ -31,7 +31,7 @@ public:
         SkyboxPassBindlessParam pass_param{};
         BindlessArrayRef        bindless{};
         TextureRef              cubemap_owner{};
-        DepthBufferRef          depth_owner{};
+        TextureRef              depth_owner{};
         TextureRef              output{};
         Rect2D                  render_area{};
     };

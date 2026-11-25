@@ -492,7 +492,7 @@ ShadowDepthPass::ShadowDepthPass(RasterContext& context) : m_culling_pass(contex
         {}, // Vertex Buffers 通过 Bindless 访问
         {}, // Shadow depth pass 不需要 color attachments
         RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(),
-        context.textures.depth_linear_sampler.tex->GetFormat()
+        RasterTextures::DepthFormat
     );
 
     ShadowDepthPassPipeline::MutationSet mutation_set{};
@@ -523,7 +523,7 @@ ShadowDepthPass::ShadowDepthPass(RasterContext& context) : m_culling_pass(contex
         {},
         {},
         RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(),
-        context.textures.depth_linear_sampler.tex->GetFormat()
+        RasterTextures::DepthFormat
     );
     multiview_pso_info.SetViewMask(k_point_shadow_view_mask);
 
@@ -634,7 +634,7 @@ bool ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
             uint2     sm_size(ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size);
             TexConfig tex_cfg =
                 TexConfig::Depth(
-                    context.textures.depth_linear_sampler.tex->GetFormat() // 使用普通DepthBuffer的格式
+                    RasterTextures::DepthFormat
                 )
                     .Usage(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT)
                     .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE);
@@ -689,7 +689,7 @@ bool ShadowDepthPass::PreparePointShadowResources(RasterContext& context, const 
             cube_res.tex = context.device.CreateCubeMap(
                 cube_res.name.c_str(),
                 Extent2D(ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
-                context.textures.depth_linear_sampler.tex->GetFormat(),
+                RasterTextures::DepthFormat,
                 ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
             );
             InitializeGraphicsTexture(cube_res.tex);
