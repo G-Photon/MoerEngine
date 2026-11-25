@@ -55,7 +55,6 @@ public:
         const Camera& camera,
         GraphResources resources
     );
-    void Process(RasterContext& context, const RasterConfig& config, const Camera& camera);
 
     bool IsSupported() const {
         return supported;

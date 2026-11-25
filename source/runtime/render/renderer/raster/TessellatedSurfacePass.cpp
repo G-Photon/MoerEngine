@@ -192,11 +192,9 @@ TessellatedSurfacePass::RecordParameters TessellatedSurfacePass::Prepare(
 
     parameters.enabled        = true;
     parameters.surface_data   = surface_data_buffer;
-    parameters.base_color     = context.textures.base_color;
-    parameters.normal         = context.textures.normal;
-    parameters.metal_rough_ao = context.textures.metal_rough_ao;
     parameters.depth          = context.textures.depth_linear_sampler.tex->GetView();
-    parameters.render_area    = parameters.base_color.GetRect2D();
+    const auto size = context.GetResolution();
+    parameters.render_area    = Rect2D(0, 0, size.x, size.y);
     parameters.instance_count = grid_resolution * grid_resolution;
     return parameters;
 }
@@ -251,15 +249,6 @@ void TessellatedSurfacePass::RecordDraw(CommandList& cmd_list, const RecordParam
             }
         );
     cmd_list.PopScopeWithTimeScope();
-}
-
-void TessellatedSurfacePass::Process(
-    RasterContext&      context,
-    const RasterConfig& config,
-    const Camera&       camera
-) {
-    const RecordParameters parameters = Prepare(context, config, camera);
-    Record(context.cmd_list, parameters);
 }
 
 } // namespace Moer::Render::Raster

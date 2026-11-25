@@ -312,8 +312,12 @@ RenderGraph::PassHandle GeometryPass::AddToGraph(
                 .Write(resources.depth, RenderGraph::TextureAccessType::DepthStencilAttachment);
             scene_reads.Declare(builder);
         },
-        [this, parameters](CommandList& commands) {
-            RecordDraw(commands, *parameters);
+        [this, parameters, resources, &graph](CommandList& commands) {
+            auto resolved = *parameters;
+            resolved.base_color = graph.GetPhysicalTexture(resources.base_color);
+            resolved.normal = graph.GetPhysicalTexture(resources.normal);
+            resolved.metal_rough_ao = graph.GetPhysicalTexture(resources.metal_rough_ao);
+            RecordDraw(commands, resolved);
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
     );
@@ -362,9 +366,13 @@ void TessellatedSurfacePass::AddToGraph(
                 .ReadWrite(resources.metal_rough_ao, RenderGraph::TextureAccessType::ColorAttachment)
                 .ReadWrite(resources.depth, RenderGraph::TextureAccessType::DepthStencilAttachment);
         },
-        [this, prepared](CommandList& cmd_list) {
+        [this, prepared, resources, &graph](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "TessellatedSurface", [&] {
-                RecordDraw(cmd_list, prepared.Get());
+                auto resolved = prepared.Get();
+                resolved.base_color.tex = graph.GetPhysicalTexture(resources.base_color);
+                resolved.normal.tex = graph.GetPhysicalTexture(resources.normal);
+                resolved.metal_rough_ao.tex = graph.GetPhysicalTexture(resources.metal_rough_ao);
+                RecordDraw(cmd_list, resolved);
             });
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
@@ -437,9 +445,13 @@ void DirectionalShadowMaskPass::AddToGraph(
                 .Read(resources.shadow_maps)
                 .Write(resources.shadow_mask, RenderGraph::TextureAccessType::ColorAttachment);
         },
-        [this, prepared](CommandList& cmd_list) {
+        [this, prepared, resources, &graph](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "DirectionalShadowMask", [&] {
-                Record(cmd_list, prepared.Get());
+                auto resolved = prepared.Get();
+                resolved.normal_owner = graph.GetPhysicalTexture(resources.normal);
+                resolved.depth_owner = graph.GetPhysicalTexture(resources.depth);
+                resolved.output = graph.GetPhysicalTexture(resources.shadow_mask);
+                Record(cmd_list, resolved);
             });
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
@@ -505,9 +517,16 @@ void LightingPass::AddToGraph(
                 builder.Read(resources.scene_lights, RenderGraph::BufferAccessType::ShaderRead);
             }
         },
-        [this, prepared](CommandList& cmd_list) {
+        [this, prepared, resources, &graph](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "Lighting", [&] {
-                Record(cmd_list, prepared.Get());
+                auto resolved = prepared.Get();
+                resolved.base_color_owner = graph.GetPhysicalTexture(resources.base_color);
+                resolved.normal_owner = graph.GetPhysicalTexture(resources.normal);
+                resolved.metal_rough_ao_owner = graph.GetPhysicalTexture(resources.metal_rough_ao);
+                resolved.depth_owner = graph.GetPhysicalTexture(resources.depth);
+                resolved.shadow_mask_owner = graph.GetPhysicalTexture(resources.shadow_mask);
+                resolved.output = graph.GetPhysicalTexture(resources.lighting_output);
+                Record(cmd_list, resolved);
             });
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
@@ -539,16 +558,21 @@ void SkyboxPass::AddToGraph(
 
     graph.AddRecordPass(
         "Skybox",
-        [resources](RenderGraph::PassBuilder& builder) {
+        [resources, clear_depth](RenderGraph::PassBuilder& builder) {
             // Skybox disables depth writes, but the attachment STORE operation
             // still writes memory at the end of rendering.
             builder.ReadWrite(resources.depth, RenderGraph::TextureAccessType::DepthStencilAttachment)
-                .Read(resources.cubemap, RenderGraph::TextureAccessType::Sampled)
-                .ReadWrite(resources.lighting_output, RenderGraph::TextureAccessType::ColorAttachment);
+                .Read(resources.cubemap, RenderGraph::TextureAccessType::Sampled);
+            if (clear_depth)
+                builder.Write(resources.lighting_output, RenderGraph::TextureAccessType::ColorAttachment);
+            else
+                builder.ReadWrite(resources.lighting_output, RenderGraph::TextureAccessType::ColorAttachment);
         },
-        [this, prepared](CommandList& cmd_list) {
+        [this, prepared, resources, &graph](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "Skybox", [&] {
-                Record(cmd_list, prepared.Get());
+                auto resolved = prepared.Get();
+                resolved.output = graph.GetPhysicalTexture(resources.lighting_output);
+                Record(cmd_list, resolved);
             });
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
@@ -586,9 +610,11 @@ void ProbeGizmoPass::AddToGraph(
                 .ReadWrite(resources.lighting_output, RenderGraph::TextureAccessType::ColorAttachment)
                 .SideEffect();
         },
-        [this, prepared](CommandList& cmd_list) {
+        [this, prepared, resources, &graph](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "ProbeGizmo", [&] {
-                Record(cmd_list, prepared.Get());
+                auto resolved = prepared.Get();
+                resolved.output.tex = graph.GetPhysicalTexture(resources.lighting_output);
+                Record(cmd_list, resolved);
             });
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed

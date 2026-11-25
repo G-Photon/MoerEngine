@@ -1131,11 +1131,21 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     graph_resources.scene_lights =
                         ImportRasterBuffer(graph, "scene_lights", scene_light_buffer.Get());
                 }
-                graph_resources.base_color =
-                    import_texture("base_color", raster_context.textures.base_color.tex);
-                graph_resources.normal = import_texture("normal", raster_context.textures.normal.tex);
-                graph_resources.metal_rough_ao =
-                    import_texture("metal_rough_ao", raster_context.textures.metal_rough_ao.tex);
+                const auto scene_target = [&](std::string_view name, EPixelFormat format, const TextureRef& external = {}) {
+#if WITH_CUDA
+                    // CUDA splits recording into two graphs; these images cross that boundary.
+                    return import_texture(name, external);
+#else
+                    return graph.CreateTransientTexture(name, RGTransientTextureDesc{
+                        .extent = Extent3D(scene_resolution.x, scene_resolution.y, 1), .format = format,
+                        .usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT |
+                                 ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST
+                    });
+#endif
+                };
+                graph_resources.base_color = scene_target("base_color", RasterTextures::BaseColorFormat, raster_context.textures.base_color.tex);
+                graph_resources.normal = scene_target("normal", RasterTextures::NormalFormat, raster_context.textures.normal.tex);
+                graph_resources.metal_rough_ao = scene_target("metal_rough_ao", RasterTextures::MaterialFormat, raster_context.textures.metal_rough_ao.tex);
                 graph_resources.depth =
                     import_texture("depth", raster_context.textures.depth_linear_sampler.tex);
                 graph_resources.noise = import_texture("noise", raster_context.textures.noise_tex.tex);
@@ -1148,10 +1158,19 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     import_texture("hiz_current", raster_context.textures.hiz_current.tex);
                 graph_resources.hiz_previous =
                     import_texture("hiz_previous", raster_context.textures.hiz_previous.tex);
-                graph_resources.shadow_mask =
-                    import_texture("shadow_mask", raster_context.textures.shadow_mask.tex);
-                graph_resources.lighting_output =
-                    import_texture("lighting_output", raster_context.textures.lighting_output.tex);
+                graph_resources.shadow_mask = scene_target("shadow_mask", RasterTextures::ShadowMaskFormat, raster_context.textures.shadow_mask.tex);
+                graph_resources.lighting_output = scene_target("lighting_output", RasterTextures::LightingOutputFormat, raster_context.textures.lighting_output.tex);
+                // Mesh-only targets have no producer in Gaussian-only scenes.
+                if (selected_framebuffer_name == "base_color")
+                    graph_resources.selected_framebuffer = has_meshes ? graph_resources.base_color : graph_resources.lighting_output;
+                else if (selected_framebuffer_name == "normal")
+                    graph_resources.selected_framebuffer = has_meshes ? graph_resources.normal : graph_resources.lighting_output;
+                else if (selected_framebuffer_name == "metal_rough_ao")
+                    graph_resources.selected_framebuffer = has_meshes ? graph_resources.metal_rough_ao : graph_resources.lighting_output;
+                else if (selected_framebuffer_name == "shadow_mask")
+                    graph_resources.selected_framebuffer = has_meshes ? graph_resources.shadow_mask : graph_resources.lighting_output;
+                if (selected_framebuffer_name == "lighting_output")
+                    graph_resources.selected_framebuffer = graph_resources.lighting_output;
                 if (raster_ao_frame) {
                     const auto& frame = *raster_ao_frame;
                     graph_resources.ao_final = import_texture("ao_final", frame.Output().tex);

@@ -143,11 +143,8 @@ public:
         param.debug_visualization_mode =
             static_cast<uint32>(raster_config.geometry_debug_visualization);
 
-        const auto render_area = context.textures.base_color.GetRect2D();
-        assert(
-            render_area == context.textures.normal.GetRect2D() &&
-            render_area == context.textures.metal_rough_ao.GetRect2D()
-        );
+        const auto size = context.GetResolution();
+        const Rect2D render_area(0, 0, size.x, size.y);
 
         const auto& visibility = context.gpu_culling_buffers.geometry;
         return RecordParameters{
@@ -160,10 +157,7 @@ public:
             .draw_command_stride = visibility.draw_cmd_buf->GetStride(),
             .max_draw_count = visibility.max_draw_count,
             .render_area = render_area,
-            .depth = context.textures.depth_linear_sampler.tex,
-            .base_color = context.textures.base_color.tex,
-            .normal = context.textures.normal.tex,
-            .metal_rough_ao = context.textures.metal_rough_ao.tex
+            .depth = context.textures.depth_linear_sampler.tex
         };
     }
 
@@ -200,16 +194,6 @@ public:
         GraphResources      resources,
         CullingStats&       out_stats
     );
-
-    void Process(
-        RasterContext&      context,
-        const RasterConfig& raster_config,
-        const Camera&       camera,
-        CullingStats&       out_stats
-    ) {
-        const auto parameters = Prepare(context, raster_config, camera, out_stats);
-        Record(context.cmd_list, parameters);
-    }
 
 private:
     GeometryPassPipeline pipeline;

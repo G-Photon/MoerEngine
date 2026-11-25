@@ -17,7 +17,7 @@ Rect2D MipRect(const TextureRef& texture, uint32 mip = 0) {
 } // namespace
 
 BloomPass::BloomPass(RasterContext& context) :
-    BloomPass(context.manager, context.textures.lighting_output.tex->GetFormat()) {}
+    BloomPass(context.manager, RasterTextures::LightingOutputFormat) {}
 
 BloomPass::BloomPass(ShaderManager& manager, EPixelFormat scene_format) {
     const RHIRasterizeInfo rasterize_info = RHIRasterizeInfo::Preset();

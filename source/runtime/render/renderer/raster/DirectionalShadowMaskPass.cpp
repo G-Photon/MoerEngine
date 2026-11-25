@@ -4,14 +4,17 @@
 #include "RasterTool.h"
 
 namespace Moer::Render::Raster {
-DirectionalShadowMaskPass::DirectionalShadowMaskPass(RasterContext& context) {
+DirectionalShadowMaskPass::DirectionalShadowMaskPass(RasterContext& context) :
+    DirectionalShadowMaskPass(context.manager) {}
+
+DirectionalShadowMaskPass::DirectionalShadowMaskPass(ShaderManager& manager) {
     GfxPsoCreateInfo pso_full_screen_info(
         RHIRasterizeInfo::Preset(),
         {},
-        {RHIColorAttachmentInfo::Preset(context.textures.shadow_mask.tex->GetFormat())}
+        {RHIColorAttachmentInfo::Preset(RasterTextures::ShadowMaskFormat)}
     );
 
-    pipeline = context.manager.Raster()
+    pipeline = manager.Raster()
                    .Vertex("core/utils/FullScreenQuad.hlsl")
                    .Pixel("pipelines/raster/deferred/lighting/shadows/ShadowMask.frag.hlsl")
                    .Build<DirectionalShadowMaskPassPipeline>(std::move(pso_full_screen_info));
@@ -20,15 +23,11 @@ DirectionalShadowMaskPass::DirectionalShadowMaskPass(RasterContext& context) {
 DirectionalShadowMaskPass::RecordParameters
 DirectionalShadowMaskPass::Prepare(const RasterContext& context) const {
     RecordParameters parameters{
-        .normal_handle = context.textures.normal.hdl,
-        .depth_handle  = context.textures.depth_nearest_sampler.hdl,
-        .normal_owner  = context.textures.normal.tex,
-        .depth_owner   = context.textures.depth_nearest_sampler.tex,
         .lighting_data = context.lighting_data_buffer.buf,
         .bindless      = context.bdls,
-        .output        = context.textures.shadow_mask.tex,
-        .render_area   = context.textures.shadow_mask.GetRect2D(),
     };
+    const auto size = context.GetResolution();
+    parameters.render_area = Rect2D(0, 0, size.x, size.y);
     for (size_t index = 0; index < parameters.cascade_shadow_owners.size(); ++index) {
         parameters.cascade_shadow_owners[index] = context.csm_data.shadow_map_textures[index].tex;
     }
@@ -42,12 +41,10 @@ void DirectionalShadowMaskPass::Record(
     CommandList&            cmd_list,
     const RecordParameters& parameters
 ) {
-    DirectionalShadowMaskPassBindlessParam param;
-    param.normal_hdl = parameters.normal_handle;
-    param.depth_hdl  = parameters.depth_handle;
-
     cmd_list
-        .Gfx(pipeline, parameters.lighting_data, parameters.bindless, param)
+        .Gfx(pipeline, parameters.lighting_data, parameters.bindless,
+            parameters.normal_owner->GetView(), parameters.depth_owner->GetView(),
+            Sampler{SF_LINEAR, SAM_REPEAT}, Sampler{SF_NEAREST, SAM_CLAMP_TO_EDGE})
         .Draw(
             "Directional Shadow Mask Pass",
             parameters.render_area,

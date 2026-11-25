@@ -25,7 +25,8 @@ void RunDisplayTransientContracts();
 void RunEffectsTransientContracts();
 void RunAoCompositeTransientContracts();
 void RunAoScratchTransientContracts();
-int RunDisplayTransientScene(int argc, const char** argv, bool effects, bool ao_composite = false, bool ao_scratch = false);
+void RunGBufferTransientContracts();
+int RunDisplayTransientScene(int argc, const char** argv, bool effects, bool ao_composite = false, bool ao_scratch = false, bool gbuffer = false);
 
 namespace {
 
@@ -434,6 +435,8 @@ int main(int argc, const char** argv) {
     if (argc > 1 && std::string_view(argv[1]) == "--effects-scene") return RunDisplayTransientScene(argc, argv, true);
     if (argc > 1 && std::string_view(argv[1]) == "--ao-composite-scene") return RunDisplayTransientScene(argc, argv, false, true);
     if (argc > 1 && std::string_view(argv[1]) == "--ao-scratch-scene") return RunDisplayTransientScene(argc, argv, false, false, true);
+    if (argc > 1 && std::string_view(argv[1]) == "--gbuffer-scene") return RunDisplayTransientScene(argc, argv, false, false, false, true);
+    if (argc > 1 && std::string_view(argv[1]) == "--gbuffer-empty-scene") return RunDisplayTransientScene(argc, argv, false, false, false, true);
     bool device_ready = false, tasks_ready = false;
     try {
         LogSystem::Init();
@@ -450,6 +453,8 @@ int main(int argc, const char** argv) {
             RunAoCompositeTransientContracts();
         } else if (argc > 1 && std::string_view(argv[1]) == "--ao-scratch") {
             RunAoScratchTransientContracts();
+        } else if (argc > 1 && std::string_view(argv[1]) == "--gbuffer") {
+            RunGBufferTransientContracts();
         } else {
             Numeric();
             TonemappingTransient();

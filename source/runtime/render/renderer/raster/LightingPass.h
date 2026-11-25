@@ -18,8 +18,17 @@ public:
     DEFINE_RASTER_PIPELINE_CLASS(PbrMaterialShadingPipeline);
     DEFINE_SHADER_BUFFER(lighting_data);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_TEX(gbuffer_base_color);
+    DEFINE_SHADER_TEX(gbuffer_normal);
+    DEFINE_SHADER_TEX(gbuffer_material);
+    DEFINE_SHADER_TEX(gbuffer_depth);
+    DEFINE_SHADER_TEX(shadow_mask);
+    DEFINE_SHADER_SAMPLER(gbuffer_sampler);
+    DEFINE_SHADER_SAMPLER(depth_sampler);
     DEFINE_SHADER_CONSTANTS(LIGHTING_PASS_CONSTANTS);
-    DEFINE_SHADER_ARGS(lighting_data, bdls, param, extra_ambient_intensity);
+    DEFINE_SHADER_ARGS(lighting_data, bdls, param, extra_ambient_intensity,
+        gbuffer_base_color, gbuffer_normal, gbuffer_material, gbuffer_depth, shadow_mask,
+        gbuffer_sampler, depth_sampler);
 };
 
 class LightingPass {
@@ -40,9 +49,8 @@ public:
     };
 
     /**
-     * Immutable recording input captured on the render thread. Bindless handles
-     * alone do not own their resources, so every referenced buffer/texture is
-     * retained until the recorded source reaches a terminal submit callback.
+     * Prepare captures scene inputs. Record resolves GBuffer attachments from
+     * the graph after transient allocation; commands retain their physical owners.
      */
     struct RecordParameters {
         MaterialPassBindlessParam pass_param{};
@@ -53,21 +61,23 @@ public:
         TextureRef                base_color_owner{};
         TextureRef                normal_owner{};
         TextureRef                metal_rough_ao_owner{};
-        DepthBufferRef            depth_owner{};
+        TextureRef                depth_owner{};
         TextureRef                cubemap_owner{};
         TextureRef                shadow_mask_owner{};
         TextureRef                output{};
         Rect2D                    render_area{};
     };
 
-    LightingPass(RasterContext& context) {
+    explicit LightingPass(RasterContext& context) : LightingPass(context.manager) {}
+
+    explicit LightingPass(ShaderManager& manager) {
         GfxPsoCreateInfo pipeline_info(
             RHIRasterizeInfo::Preset(),
             {},
-            {RHIColorAttachmentInfo::Preset(context.textures.lighting_output.tex->GetFormat())}
+            {RHIColorAttachmentInfo::Preset(RasterTextures::LightingOutputFormat)}
         );
 
-        pipeline = context.manager.Raster()
+        pipeline = manager.Raster()
                        .Vertex("core/utils/FullScreenQuad.hlsl")
                        .Pixel("pipelines/raster/deferred/lighting/RasterLightingPass.frag.hlsl")
                        .Build<PbrMaterialShadingPipeline>(std::move(pipeline_info));
@@ -82,27 +92,16 @@ public:
         pass_param.enable_extra_ambient    = ui_config.shading_enable_extra_ambient;
         pass_param.shading_mode            = static_cast<uint32>(ui_config.shading_mode);
 
-        pass_param.gbuffer_base_color     = context.textures.base_color.hdl;
-        pass_param.gbuffer_normal         = context.textures.normal.hdl;
-        pass_param.gbuffer_metal_rough_ao = context.textures.metal_rough_ao.hdl;
-        pass_param.gbuffer_depth          = context.textures.depth_nearest_sampler.hdl;
-
         const auto& gpu_scene_res     = context.GetGpuSceneRes();
         pass_param.light_buf_hdl      = gpu_scene_res.light_buf.hdl;
         pass_param.cubemap_handle     = context.textures.cubemap_tex.hdl;
-        pass_param.shadow_mask_handle = context.textures.shadow_mask.hdl;
 
         parameters.lighting_data        = context.lighting_data_buffer.buf;
         parameters.light_buffer_owner   = gpu_scene_res.light_buf.buf;
         parameters.bindless             = context.bdls;
-        parameters.base_color_owner     = context.textures.base_color.tex;
-        parameters.normal_owner         = context.textures.normal.tex;
-        parameters.metal_rough_ao_owner = context.textures.metal_rough_ao.tex;
-        parameters.depth_owner          = context.textures.depth_nearest_sampler.tex;
         parameters.cubemap_owner        = context.textures.cubemap_tex.tex;
-        parameters.shadow_mask_owner    = context.textures.shadow_mask.tex;
-        parameters.output               = context.textures.lighting_output.tex;
-        parameters.render_area          = context.textures.lighting_output.GetRect2D();
+        const auto size = context.GetResolution();
+        parameters.render_area          = Rect2D(0, 0, size.x, size.y);
         return parameters;
     }
 
@@ -113,7 +112,14 @@ public:
                 parameters.lighting_data,
                 parameters.bindless,
                 parameters.pass_param,
-                parameters.extra_ambient_intensity
+                parameters.extra_ambient_intensity,
+                parameters.base_color_owner->GetView(),
+                parameters.normal_owner->GetView(),
+                parameters.metal_rough_ao_owner->GetView(),
+                parameters.depth_owner->GetView(),
+                parameters.shadow_mask_owner->GetView(),
+                Sampler{SF_LINEAR, SAM_REPEAT},
+                Sampler{SF_NEAREST, SAM_CLAMP_TO_EDGE}
             )
             .Draw(
                 "Lighting Pass",

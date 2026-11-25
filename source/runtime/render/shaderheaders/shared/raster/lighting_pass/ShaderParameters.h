@@ -274,14 +274,8 @@ struct MaterialPassBindlessParam {
     uint   enable_extra_ambient;
     uint   material_type;
     uint   light_buf_hdl;
-    uint   gbuffer_base_color;
-    uint   gbuffer_normal;
-    uint   gbuffer_metal_rough_ao;
-    uint   gbuffer_depth;
-    uint   gbuffer_position;
     uint   shading_mode;
     uint   cubemap_handle;
-    uint   shadow_mask_handle;
 };
 
 // UBO (ConstantBuffer)，需要遵循std140
@@ -355,12 +349,6 @@ static_assert(sizeof(ProbeBrickGpuDesc) % 16 == 0);
 static_assert(offsetof(LightingData, probe_system_config) % 16 == 0);
 static_assert(sizeof(LightingData) % 16 == 0);
 #endif
-
-struct DirectionalShadowMaskPassBindlessParam {
-    uint normal_hdl;
-    uint depth_hdl;
-};
-
 // MARK: Main Content End
 
 #ifdef __cplusplus

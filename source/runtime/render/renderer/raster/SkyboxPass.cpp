@@ -12,7 +12,7 @@ SkyboxPass::SkyboxPass(RasterContext& context) {
     GfxPsoCreateInfo pipeline_info(
         RHIRasterizeInfo::Preset(),
         {},
-        {RHIColorAttachmentInfo::Preset(context.textures.lighting_output.tex->GetFormat())},
+        {RHIColorAttachmentInfo::Preset(RasterTextures::LightingOutputFormat)},
         depth_stencil_info,
         context.textures.depth_linear_sampler.tex->GetFormat()
     );
@@ -45,8 +45,8 @@ SkyboxPass::RecordParameters SkyboxPass::Prepare(
     parameters.bindless      = context.bdls;
     parameters.cubemap_owner = context.textures.cubemap_tex.tex;
     parameters.depth_owner   = context.textures.depth_linear_sampler.tex;
-    parameters.output        = context.textures.lighting_output.tex;
-    parameters.render_area   = context.textures.lighting_output.GetRect2D();
+    const auto size = context.GetResolution();
+    parameters.render_area   = Rect2D(0, 0, size.x, size.y);
     return parameters;
 }
 
@@ -60,9 +60,11 @@ void SkyboxPass::Record(CommandList& cmd_list, const RecordParameters& parameter
             parameters.render_area,
             std::move(RasterTool::GetFullScreenDrawDatas()),
             depth_attachment,
-            // 保留上一个延迟光照 Pass 写入的结果。
+            // Meshless scenes initialize this target; mesh scenes preserve deferred lighting.
             ColorAttachment{
-                parameters.output, EAttachmentAction::AC_LOAD_STORE, float4(0, 0, 0, 0)
+                parameters.output,
+                parameters.clear_depth ? EAttachmentAction::AC_CLEAR_STORE : EAttachmentAction::AC_LOAD_STORE,
+                float4(0, 0, 0, 0)
             }
         );
 }

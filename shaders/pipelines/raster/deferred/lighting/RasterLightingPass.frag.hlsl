@@ -12,16 +12,23 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "features/gaussian/ShadowSampling.hlsli"
 
 [[vk::binding(0, 0)]] ConstantBuffer<Moer::LightingData> lighting_data;
+[[vk::binding(1, 0)]] Texture2D<float4> gbuffer_base_color;
+[[vk::binding(2, 0)]] Texture2D<float4> gbuffer_normal;
+[[vk::binding(3, 0)]] Texture2D<float4> gbuffer_material;
+[[vk::binding(4, 0)]] Texture2D<float> gbuffer_depth;
+[[vk::binding(5, 0)]] Texture2D<float> shadow_mask;
+[[vk::binding(6, 0)]] SamplerState gbuffer_sampler;
+[[vk::binding(7, 0)]] SamplerState depth_sampler;
 #include "shared/raster/lighting_pass/Constants.h"
 DEFINE_SHADER_CONSTANTS(LIGHTING_PASS_CONSTANTS)
 
 float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     // MARK: GBuffer
-    float3 albedo = TextureHandle(moer_constants.param.gbuffer_base_color).Sample2D<float3>(in_uv);
-    float3 metal_rough_ao = TextureHandle(moer_constants.param.gbuffer_metal_rough_ao).Sample2D<float3>(in_uv);
-    float  depth = TextureHandle(moer_constants.param.gbuffer_depth).Sample2D<float>(in_uv);
+    float3 albedo = gbuffer_base_color.Sample(gbuffer_sampler, in_uv).rgb;
+    float3 metal_rough_ao = gbuffer_material.Sample(gbuffer_sampler, in_uv).rgb;
+    float  depth = gbuffer_depth.Sample(depth_sampler, in_uv);
     float3 N = normalize(
-        Raster::UnpackNormal(TextureHandle(moer_constants.param.gbuffer_normal).Sample2D<float3>(in_uv))
+        Raster::UnpackNormal(gbuffer_normal.Sample(gbuffer_sampler, in_uv).rgb)
     ); // 因为法线mipmap不满足线性关系，所以这里需要normalize
     float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.clip2world);
     float metallic = metal_rough_ao.x;
@@ -56,7 +63,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     );
 
     // - Shadow
-    float shadow = TextureHandle(moer_constants.param.shadow_mask_handle).Sample2D<float>(in_uv);
+    float shadow = shadow_mask.Sample(gbuffer_sampler, in_uv);
 
     // MARK: Shading
     LightContext light_ctx;

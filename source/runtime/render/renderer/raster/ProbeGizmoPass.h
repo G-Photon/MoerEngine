@@ -51,7 +51,7 @@ public:
         GfxPsoCreateInfo pso_info(
             RHIRasterizeInfo::Preset(),
             {},
-            {RHIColorAttachmentInfo::Preset<Blend::ALPHA_BLEND>(context.textures.lighting_output.tex->GetFormat())},
+            {RHIColorAttachmentInfo::Preset<Blend::ALPHA_BLEND>(RasterTextures::LightingOutputFormat)},
             RHIDepthStencilStateInfo::Preset(),
             PF_UNDEFINED,
             EPrimitiveTopology::TRIANGLE_LIST
@@ -70,7 +70,6 @@ public:
     ) const {
         RecordParameters parameters{};
         parameters.bindless = context.bdls;
-        parameters.output   = context.textures.lighting_output;
         const uint32 probe_count      = context.probe_volume.GetPhysicalAllocatorCapacity();
         const uint32 gizmo_color_mode = static_cast<uint32>(Clamp(
             config.probe_gi_gizmo_color_mode,
@@ -302,11 +301,6 @@ public:
         GraphResources resources,
         std::span<const RenderGraph::SetupPassHandle> setup_dependencies = {}
     );
-
-    void Process(RasterContext& context, const RasterConfig& config, const Camera& camera) {
-        const RecordParameters parameters = Prepare(context, config, camera);
-        Record(context.cmd_list, parameters);
-    }
 
 private:
     static void AppendBounds(

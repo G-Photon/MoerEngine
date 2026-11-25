@@ -334,19 +334,33 @@ void RunDisplayTransientContracts() {
     std::cout << "[TESTCASE][PASS] DisplayTransient: 24 PNG pixel comparisons, 4 rejected overflow frames, 4 rejected mismatches, 56 busy rejections, 36 debug cases" << std::endl;
 }
 
-int RunDisplayTransientScene(int argc, const char** argv, bool effects, bool ao_composite, bool ao_scratch) {
+int RunDisplayTransientScene(int argc, const char** argv, bool effects, bool ao_composite, bool ao_scratch, bool gbuffer) {
     TestDirectory directory;
     Engine engine;
     try {
         engine.Init(argc, argv, false);
         const auto config = engine.GetEditorConfig();
+        const bool empty_gbuffer = gbuffer && argc > 1 && std::string_view(argv[1]) == "--gbuffer-empty-scene";
+        if (empty_gbuffer) {
+            const auto inputs = directory.path / "input";
+            Require(std::filesystem::create_directory(inputs), "Cannot create Gaussian-only fixture directory");
+            const auto source = inputs / "gaussian-only.ply";
+            std::ofstream file(source);
+            file << "ply\nformat ascii 1.0\nelement vertex 1\n";
+            for (const char* property : {"x", "y", "z", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3", "opacity", "f_dc_0", "f_dc_1", "f_dc_2"})
+                file << "property float " << property << '\n';
+            file << "end_header\n0 0 -3 -1 -1 -1 1 0 0 0 2 1 -.5 -.5\n";
+            Require(file.good(), "Cannot write Gaussian-only fixture");
+            file.close();
+            config->scene_path = source.generic_string();
+        }
         config->selected_render_method = ERenderMethod::Raster;
         config->raster_config.probe_gi_enabled = false;
         config->raster_config.shadow_map_mode = EShadowMapMode::CSM;
         config->validation_selected_frame_buffer_name = "tonemapping_output";
         constexpr std::array modes{EGaussianDebugView::Color, EGaussianDebugView::Transmittance,
             EGaussianDebugView::TileCoverage, EGaussianDebugView::ShadowVisibility, EGaussianDebugView::ShadowDepth};
-        const uint32 phase_count = ao_scratch ? 24 : ao_composite ? 16 : effects ? 12 : uint32(modes.size());
+        const uint32 phase_count = empty_gbuffer ? 5 : gbuffer ? 20 : ao_scratch ? 24 : ao_composite ? 16 : effects ? 12 : uint32(modes.size());
         const auto recording = CVar::Find("Render.Raster.RDG.ParallelRecording");
         Require(recording.has_value(), "Scene recording policy was not registered");
         uint32 phase = 0, phase_frames = 0, ready_frames = 0, exported_images = 0;
@@ -356,6 +370,12 @@ int RunDisplayTransientScene(int argc, const char** argv, bool effects, bool ao_
             .on_tick_test = [&](Scene& scene) {
                 if (!scene.IsReady()) return;
                 Require(++ready_frames < 2400, "Display scene exceeded its bounded frame budget");
+                if (!imported && empty_gbuffer) {
+                    Require(scene.GetGaussianSceneContent() == EGaussianSceneContent::GaussianOnly,
+                        "Skybox boundary test unexpectedly contains meshes");
+                    std::cout << "[GBuffer scene] GaussianOnly fixture loaded; mesh path disabled" << std::endl;
+                    imported = true;
+                }
                 if (!imported) {
                     auto asset = std::make_shared<GaussianAsset>();
                     GGaussian gaussian{};
@@ -377,7 +397,25 @@ int RunDisplayTransientScene(int argc, const char** argv, bool effects, bool ao_
                     config->active_viewport_mode = phase % 2 ? EEditorViewportMode::Game : EEditorViewportMode::Scene;
                     auto settings = scene.GetGaussianViewSettings();
                     settings.display_mode = EGaussianDisplayMode::Engine;
-                    settings.debug_view = effects || ao_composite || ao_scratch ? EGaussianDebugView::Color : modes[phase];
+                    settings.debug_view = effects || ao_composite || ao_scratch || gbuffer ? EGaussianDebugView::Color : modes[phase];
+                    if (gbuffer) {
+                        auto& raster = config->raster_config;
+                        constexpr std::array previews{"base_color", "normal", "metal_rough_ao", "shadow_mask", "lighting_output"};
+                        const uint32 mode = phase / previews.size();
+                        raster.ao_mode = EAoMode::NONE;
+                        raster.ssr_is_ssr_enabled = false;
+                        raster.shadow_map_mode = mode == 0 ? EShadowMapMode::NONE : EShadowMapMode::CSM;
+                        raster.shadow_pcss_enabled = mode == 2;
+                        raster.tessellated_surface_enabled = mode == 2;
+                        raster.probe_gi_enabled = mode == 3;
+                        raster.probe_gi_trace_ray_count = 8;
+                        raster.probe_gi_update_brick_budget = 1;
+                        config->scene_view_gizmos.show_probe_gi = mode == 3;
+                        config->active_viewport_mode = mode == 3 ? EEditorViewportMode::Scene : config->active_viewport_mode;
+                        config->validation_selected_frame_buffer_name = previews[phase % previews.size()];
+                        std::cout << "[GBuffer scene] phase=" << phase << " mode=" << mode
+                                  << " parallel=" << recording->value << " preview=" << config->validation_selected_frame_buffer_name << std::endl;
+                    }
                     if (ao_scratch) {
                         auto& raster = config->raster_config;
                         const uint32 mode = phase / 6;
@@ -433,7 +471,7 @@ int RunDisplayTransientScene(int argc, const char** argv, bool effects, bool ao_
                     std::cout << "[Display scene] visible=" << counts.visible_count
                               << " tile_pairs=" << counts.tile_pair_count << std::endl;
                     const auto pixels = ReadPng(path, scene_size);
-                    if (!effects && !ao_composite && !ao_scratch && modes[phase] == EGaussianDebugView::Transmittance) {
+                    if (!effects && !ao_composite && !ao_scratch && !gbuffer && modes[phase] == EGaussianDebugView::Transmittance) {
                         const auto [minimum, maximum] = std::minmax_element(pixels.begin(), pixels.end());
                         Require(*minimum < 230 && *maximum > 250,
                                 "Gaussian transmittance PNG contains no visible splat against its background");
@@ -460,7 +498,11 @@ int RunDisplayTransientScene(int argc, const char** argv, bool effects, bool ao_
         Require(imported && phase == phase_count && exported_images == phase_count,
                 "Display scene did not finish every debug/export phase");
         engine.ShutDown();
-        if (ao_scratch) {
+        if (empty_gbuffer) {
+            std::cout << "[TESTCASE][PASS] GBufferTransient empty scene: 5 GaussianOnly skybox/fallback/resize phases" << std::endl;
+        } else if (gbuffer) {
+            std::cout << "[TESTCASE][PASS] GBufferTransient scene: 20 geometry/shadow/lighting/tessellation/probe/preview phases with visible Gaussian PNG exports" << std::endl;
+        } else if (ao_scratch) {
             std::cout << "[TESTCASE][PASS] AoScratchTransient scene: 24 scratch/half-resolution/denoiser/preview phases with visible Gaussian PNG exports" << std::endl;
         } else if (ao_composite) {
             std::cout << "[TESTCASE][PASS] AoCompositeTransient scene: 16 AO/half-resolution/preview phases with visible Gaussian PNG exports" << std::endl;

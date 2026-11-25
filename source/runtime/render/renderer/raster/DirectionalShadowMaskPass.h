@@ -15,11 +15,14 @@ public:
     DEFINE_RASTER_PIPELINE_CLASS(DirectionalShadowMaskPassPipeline);
     DEFINE_SHADER_BUFFER(lighting_data);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_CONSTANT(DirectionalShadowMaskPassBindlessParam, param);
-    DEFINE_SHADER_ARGS(lighting_data, bdls, param);
+    DEFINE_SHADER_TEX(gbuffer_normal);
+    DEFINE_SHADER_TEX(gbuffer_depth);
+    DEFINE_SHADER_SAMPLER(normal_sampler);
+    DEFINE_SHADER_SAMPLER(depth_sampler);
+    DEFINE_SHADER_ARGS(lighting_data, bdls, gbuffer_normal, gbuffer_depth, normal_sampler, depth_sampler);
 };
 
-class DirectionalShadowMaskPass {
+class RENDER_API DirectionalShadowMaskPass {
 public:
     struct GraphResources {
         RenderGraph::TextureHandle normal{};
@@ -30,10 +33,8 @@ public:
     };
 
     struct RecordParameters {
-        uint32                                        normal_handle{0};
-        uint32                                        depth_handle{0};
         TextureRef       normal_owner{};
-        DepthBufferRef   depth_owner{};
+        TextureRef       depth_owner{};
         StaticArray<DepthBufferRef, CSM_MAX_CASCADES> cascade_shadow_owners{};
         StaticArray<TextureRef, RasterContext::PointShadowData::MAX_POINT_SHADOWS>
             point_shadow_owners{};
@@ -44,6 +45,7 @@ public:
     };
 
     DirectionalShadowMaskPass(RasterContext& context);
+    explicit DirectionalShadowMaskPass(ShaderManager& manager);
 
     [[nodiscard]] RecordParameters Prepare(const RasterContext& context) const;
     void Record(CommandList& cmd_list, const RecordParameters& parameters);
