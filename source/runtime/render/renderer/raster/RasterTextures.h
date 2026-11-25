@@ -31,7 +31,6 @@ namespace Moer::Render::Raster {
       TexConfig::Default(PF_R16G16B16A16_SFLOAT)                                                                \
           .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS).GraphTransient(!WITH_CUDA))             \
     X(TexHandle, denoiser_output, Tex2DTag, TexConfig::Default(PostprocessOutputFormat).Usage(E_SAMPLED_COLOR).GraphTransient()) \
-    X(TexHandle, upsample_output, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))  \
     X(TexHandle, ssr_output, Tex2DTag, TexConfig::Default(PostprocessOutputFormat).Usage(E_SAMPLED_COLOR).GraphTransient()) \
     X(TexHandle, aa_texture_1, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR).GraphTransient()) \
     X(TexHandle, aa_texture_2, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR).GraphTransient()) \
